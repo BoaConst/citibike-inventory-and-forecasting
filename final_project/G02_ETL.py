@@ -3,76 +3,46 @@
 
 # COMMAND ----------
 
-delta_df = spark.read.format("delta").load("dbfs:/FileStore/tables/G02/historic_bike_trip/")
+# Imports
+from pyspark.sql.functions import year, month, sum, count, col, current_date, date_format, date_add
+import matplotlib.pyplot as plt
+from datetime import datetime
 
 # COMMAND ----------
 
-delta_df.printSchema()
-
-
-# COMMAND ----------
-
-import os
-from pyspark.sql.functions import col
-
-# Filter the rows based on the start_station_name
-G02_df = delta_df.filter((col("start_station_name") == "West St & Chambers St"))
-
-
-# Write the processed data to a DeltaTable
-output_path = GROUP_DATA_PATH + "historical_bike_trips_G02"
-
-if not os.path.isdir(output_path):
-    dbutils.fs.mkdirs(output_path)
-
-    
-G02_df.write.format("delta").mode("append").option("path", output_path).saveAsTable("historical_bike_trips_G02")    
-display(G02_df)
-G02_df.count()
-
-# COMMAND ----------
-
-display(dbutils.fs.ls('dbfs:/FileStore/tables/G02/historic_bike_trip_g02/'))
-
-# COMMAND ----------
-
-from pyspark.sql.functions import count, date_add, last_day, col, current_date
-
+# Loading bike trip data from the delta tables
 delta_df = spark.read.format("delta").load('dbfs:/FileStore/tables/G02/historic_bike_trip_g02/')
+
+# COMMAND ----------
 
 # Define the start date and end date for the last year
 end_date = current_date()
-start_date = date_add(end_date, -12 * 30)
-# start_date = date_add(last_day(date_add(end_date, "-12 months")), 1)
+start_date = date_add(end_date, (-12 * 30) + 5)
 
-# Iterate over each month in the last year
+# COMMAND ----------
+
+# Iterate over each month in the last year and plot the trends for each unique bike type
 for i in range(12):
     # Generate the start and end dates for the current month
     current_start_date = date_add(start_date, i * 30)
     current_end_date = date_add(current_start_date, 30) if i < 11 else end_date
     
     # Make a date range query for the current month
-    month_query = delta_df.filter((col("started_at") >= current_start_date) & (col("ended_at") < current_end_date))
-    
-    # Do something with the query result, e.g. show the count
+    month_query = delta_df.filter((col("started_at") >= current_start_date) & (col("ended_at") < current_end_date))   
     month_query_count = month_query.count()
-    print(f"Month {i+1}: {month_query_count} rows")
     
-    grouped_data = month_query.groupBy("rideable_type").agg(count("ride_id"))
-    display(grouped_data)
-
-# COMMAND ----------
-
-# df = spark.read.format("csv").option("header", "true").load(BIKE_TRIP_DATA_PATH)
-
-# output_path = GROUP_DATA_PATH + "historical_bike_trips"
-
-# if not os.path.isdir(output_path):
-#     dbutils.fs.mkdirs(output_path)
-
-# history_bike_df.write \
-#     .format("delta") \
-#     .mode("overwrite") \
-#     .save(output_path)
-
-# history_bike_df.write.format("delta").mode("overwrite").saveAsTable("history_bike_trips")
+    # Group by rideable type
+    grouped_data = month_query.groupBy("rideable_type").agg(count("ride_id").alias("total_riders"))
+    
+    # Convert to pandas dataframe
+    monthly_data_pd = grouped_data.toPandas()
+    
+    # Plot the pandas dataframe using matplotlib
+    fig, ax = plt.subplots()
+    ax.bar(monthly_data_pd["rideable_type"], monthly_data_pd["total_riders"])
+    ax.set_xticks(range(0, 3))
+    ax.set_xticklabels(["Docked","Electric", "Classic"])
+    ax.set_xlabel("Bike Type")
+    ax.set_ylabel("Total Rides For Type")
+    ax.set_title(f"Month {i+1}: {month_query_count} total rides")
+    plt.show()
