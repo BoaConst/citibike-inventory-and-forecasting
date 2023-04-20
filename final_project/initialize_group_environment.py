@@ -1,5 +1,5 @@
 # Databricks notebook source
-# MAGIC %run "/Repos/sroy22@ur.rochester.edu/G02-final-project/final_project/includes/includes"
+# MAGIC %run ./includes/includes
 
 # COMMAND ----------
 
