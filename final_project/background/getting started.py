@@ -4,6 +4,15 @@
 
 # COMMAND ----------
 
+# MAGIC %sql
+# MAGIC show tables from g02_db
+
+# COMMAND ----------
+
+BIKE_TRIP_DATA_PATH
+
+# COMMAND ----------
+
 # DBTITLE 1,Display Historic Trip Files
 display(dbutils.fs.ls(BIKE_TRIP_DATA_PATH))
 

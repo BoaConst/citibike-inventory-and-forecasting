@@ -3,6 +3,15 @@
 
 # COMMAND ----------
 
+dbutils.fs.mkdirs("dbfs:/FileStore/tables/G02/")
+
+
+# COMMAND ----------
+
+display(dbutils.fs.ls('dbfs:/FileStore/tables/G02'))
+
+# COMMAND ----------
+
 # Imports
 from pyspark.sql.functions import year, month, sum, count, col, current_date, date_format, date_add
 import matplotlib.pyplot as plt
