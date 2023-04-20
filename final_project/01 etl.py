@@ -16,26 +16,34 @@ print("YOUR CODE HERE...")
 
 # COMMAND ----------
 
-
-NYC_WEATHER_FILE_PATH
-
-# COMMAND ----------
-
-# Check for files in weather data path
-import os
-dbutils.fs.ls("dbfs:/FileStore/tables/raw/weather/")
-
+print("At the high-level, there are {} and {} no. of files containing the raw data for New York Weather Data & Bike Trip Data respectively.".format(len(dbutils.fs.ls(NYC_WEATHER_FILE_PATH)), len(dbutils.fs.ls(BIKE_TRIP_DATA_PATH))))
 
 # COMMAND ----------
 
-BIKE_TRIP_DATA_PATH
+print("Starting the Streaming ETL Process for New York Weather Data and Bike Trip Data.")
 
 # COMMAND ----------
 
-# Check for files in bike trip data path
-files = dbutils.fs.ls("dbfs:/FileStore/tables/raw/bike_trips/")
-num_files = len(files)
-print(f"Total number of bike trip files: {num_files}")
+# Create a static DataFrame to infer the schema from existing CSV files
+weather_df = spark.read.format("csv") \
+    .option("header", "true") \
+    .option("inferSchema", "true") \
+    .load(NYC_WEATHER_FILE_PATH)
+
+schema = weather_df.schema
+
+# Create a streaming DataFrame to read data from the CSV files
+weather_df_stream = spark.readStream.format("csv") \
+    .option("header", "true") \
+    .option("path", NYC_WEATHER_FILE_PATH) \
+    .schema(schema) \
+    .load()
+
+weather_df_stream.printSchema()
+
+# COMMAND ----------
+
+weather_df_stream.isStreaming
 
 # COMMAND ----------
 
