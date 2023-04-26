@@ -3,27 +3,13 @@
 
 # COMMAND ----------
 
-
-
-
-start_date = str(dbutils.widgets.get('01.start_date'))
-end_date = str(dbutils.widgets.get('02.end_date'))
-hours_to_forecast = int(dbutils.widgets.get('03.hours_to_forecast'))
-promote_model = bool(True if str(dbutils.widgets.get('04.promote_model')).lower() == 'yes' else False)
-
-print(start_date,end_date,hours_to_forecast, promote_model)
-print("YOUR CODE HERE...")
-
-# COMMAND ----------
-
-
-NYC_WEATHER_FILE_PATH
+GROUP_DATA_PATH
 
 # COMMAND ----------
 
 # Check for files in weather data path
 import os
-dbutils.fs.ls("dbfs:/FileStore/tables/raw/weather/")
+dbutils.fs.ls(NYC_WEATHER_FILE_PATH)
 
 
 # COMMAND ----------
@@ -94,10 +80,6 @@ display(dbutils.fs.ls(GROUP_DATA_PATH))
 
 # COMMAND ----------
 
-display(dbutils.fs.ls('dbfs:/FileStore/tables/G02/historic_nyc_weather/'))
-
-# COMMAND ----------
-
 # Check the schema for bike trip data
 df = spark.read.format("csv").option("header", True).load(BIKE_TRIP_DATA_PATH)
 
@@ -130,18 +112,19 @@ df_bike_trip_history.count()
 # COMMAND ----------
 
 # Write the dataframe to bronze delta table
-delta_table_name = 'historic_bike_trip'
+delta_table_name = 'historic_bike_trip_ashok'
 df_bike_trip_history.write.format("delta").mode("append").option("path", GROUP_DATA_PATH + delta_table_name).saveAsTable(delta_table_name)
 
 # COMMAND ----------
 
-display(dbutils.fs.ls('dbfs:/FileStore/tables/G02/historic_bike_trip/'))
+# Check if the delta table is available at the Group data path
+display(dbutils.fs.ls(GROUP_DATA_PATH))
 
 # COMMAND ----------
 
 # Filter the delta table for G02 station
 
-delta_path = "dbfs:/FileStore/tables/G02/historic_bike_trip/"
+delta_path = "dbfs:/FileStore/tables/G02/historic_bike_trip_ashok/"
 
 # Register Delta table as temporary view
 spark.read.format("delta").load(delta_path).createOrReplaceTempView("bike_trip_history_delta")
@@ -150,8 +133,8 @@ spark.read.format("delta").load(delta_path).createOrReplaceTempView("bike_trip_h
 filtered_df_g02 = spark.sql("""
   SELECT * 
   FROM bike_trip_history_delta 
-  WHERE start_station_name = 'West St & Chambers St'
-""")
+  WHERE start_station_name = {}
+""".format("'{}'".format(GROUP_STATION_ASSIGNMENT)))
 
 # Display filtered data
 display(filtered_df_g02)  
@@ -162,16 +145,98 @@ filtered_df_g02.count()
 # COMMAND ----------
 
 # Write the dataframe to bronze delta table
-delta_table_name = 'historic_bike_trip_g02'
+delta_table_name = 'historic_bike_trip_g02_ashok'
 filtered_df_g02.write.format("delta").mode("append").option("path", GROUP_DATA_PATH + delta_table_name).saveAsTable(delta_table_name)
 
 # COMMAND ----------
 
-display(dbutils.fs.ls('dbfs:/FileStore/tables/G02/historic_bike_trip_g02/'))
+from pyspark.sql.functions import col
+
+# Read from delta tables using readStream and apply transformations
+station_info_df = (
+  spark.readStream.format("delta")
+    .load(BRONZE_STATION_INFO_PATH)
+    .select(col("*"))
+)
+
+station_status_df = (
+  spark.readStream.format("delta")
+    .load(BRONZE_STATION_STATUS_PATH)
+    .select(col("*"))
+)
+
+nyc_weather_df = (
+  spark.readStream.format("delta")
+    .load(BRONZE_NYC_WEATHER_PATH)
+    .select(col("*"))
+)
 
 # COMMAND ----------
 
-import json
+bronze_station_info_stream = (
+  station_info_df.writeStream
+    .format("delta")
+    .option("checkpointLocation", GROUP_DATA_PATH + "/checkpoint/bronze_station_info")
+    .outputMode("append")
+    .queryName("stream_bronze_station_info")
+    .start(GROUP_DATA_PATH	 + "/bronze_station_info")
+)
 
-# Return Success
-dbutils.notebook.exit(json.dumps({"exit_code": "OK"}))
+bronze_station_status_stream = (
+  station_status_df.writeStream
+    .format("delta")
+    .option("checkpointLocation", GROUP_DATA_PATH + "/checkpoint/bronze_station_status")
+    .outputMode("append")
+    .queryName("stream_bronze_station_status")
+    .start(GROUP_DATA_PATH	 + "/bronze_station_status")
+)
+
+bronze_nyc_weather_stream = (
+  nyc_weather_df.writeStream
+    .format("delta")
+    .option("checkpointLocation", GROUP_DATA_PATH + "/checkpoint/bronze_nyc_weather")
+    .outputMode("append")
+    .queryName("stream_bronze_nyc_weather")
+    .start(GROUP_DATA_PATH	 + "/bronze_nyc_weather")
+)
+
+# COMMAND ----------
+
+station_info_df = (
+  spark.readStream.format("delta")
+    .load(BRONZE_STATION_INFO_PATH)
+    .select(col("*"))
+)
+
+bronze_station_info_stream = (
+  station_info_df.writeStream
+    .format("delta")
+    .option("checkpointLocation", GROUP_DATA_PATH + "/checkpoint/bronze_station_info")
+    .outputMode("append")
+    .queryName("stream_bronze_station_info")
+    .start(GROUP_DATA_PATH	 + "/bronze_station_info")
+)
+
+# COMMAND ----------
+
+
+
+# COMMAND ----------
+
+# Check if the delta table is available at the Group data path
+display(dbutils.fs.ls(GROUP_DATA_PATH))
+
+# COMMAND ----------
+
+DELTA_TABLE_PATH = GROUP_DATA_PATH + "/bronze_nyc_weather"
+
+# Read the Delta table into a DataFrame
+df = spark.read.format("delta").load(DELTA_TABLE_PATH)
+
+# Display the contents of the DataFrame
+display(df)
+
+
+# COMMAND ----------
+
+
