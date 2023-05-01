@@ -3,9 +3,6 @@
 
 # COMMAND ----------
 
-
-
-
 start_date = str(dbutils.widgets.get('01.start_date'))
 end_date = str(dbutils.widgets.get('02.end_date'))
 hours_to_forecast = int(dbutils.widgets.get('03.hours_to_forecast'))
@@ -16,7 +13,6 @@ print("YOUR CODE HERE...")
 
 # COMMAND ----------
 
-
 NYC_WEATHER_FILE_PATH
 
 # COMMAND ----------
@@ -24,7 +20,6 @@ NYC_WEATHER_FILE_PATH
 # Check for files in weather data path
 import os
 dbutils.fs.ls("dbfs:/FileStore/tables/raw/weather/")
-
 
 # COMMAND ----------
 
@@ -106,7 +101,7 @@ df.printSchema()
 
 # COMMAND ----------
 
-# Define the schema for brik trip history data
+# Define the schema for bike trip history data
 schema_bike_trip = StructType([
     StructField("ride_id", StringType(), True),
     StructField("rideable_type", StringType(), True),
@@ -135,7 +130,7 @@ df_bike_trip_history.write.format("delta").mode("append").option("path", GROUP_D
 
 # COMMAND ----------
 
-display(dbutils.fs.ls('dbfs:/FileStore/tables/G02/historic_bike_trip/'))
+display(dbutils.fs.ls('dbfs:/FileStore/tables/G02'))
 
 # COMMAND ----------
 
@@ -168,6 +163,14 @@ filtered_df_g02.write.format("delta").mode("append").option("path", GROUP_DATA_P
 # COMMAND ----------
 
 display(dbutils.fs.ls('dbfs:/FileStore/tables/G02/historic_bike_trip_g02/'))
+
+# COMMAND ----------
+
+display(dbutils.fs.ls('dbfs:/FileStore/tables/G02/'))
+
+# COMMAND ----------
+
+display(dbutils.fs.ls('dbfs:/FileStore/tables/G13/historic_weather/'))
 
 # COMMAND ----------
 
