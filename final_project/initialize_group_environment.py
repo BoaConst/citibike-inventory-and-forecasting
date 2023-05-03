@@ -3,6 +3,20 @@
 
 # COMMAND ----------
 
+# MAGIC %sql
+# MAGIC drop database g02_db cascade
+
+# COMMAND ----------
+
+# MAGIC %run ./includes/includes
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC show tables from g02_db
+
+# COMMAND ----------
+
 # Delete all the tables underneath the directory G02, Note this also deletes the directory G02
 dbutils.fs.rm(GROUP_DATA_PATH, recurse=True)
 
