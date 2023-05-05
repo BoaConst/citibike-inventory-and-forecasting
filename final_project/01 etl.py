@@ -3,17 +3,17 @@
 
 # COMMAND ----------
 
-# Parsing the parameters provided by the main notebook
-start_date = str(dbutils.widgets.get('01.start_date'))
-end_date = str(dbutils.widgets.get('02.end_date'))
-hours_to_forecast = int(dbutils.widgets.get('03.hours_to_forecast'))
-promote_model = bool(True if str(dbutils.widgets.get('04.promote_model')).lower() == 'yes' else False)
+# DBTITLE 1,Parsing the parameters provided by the main notebook
+# start_date = str(dbutils.widgets.get('01.start_date'))
+# end_date = str(dbutils.widgets.get('02.end_date'))
+# hours_to_forecast = int(dbutils.widgets.get('03.hours_to_forecast'))
+# promote_model = bool(True if str(dbutils.widgets.get('04.promote_model')).lower() == 'yes' else False)
 
-print(start_date,end_date,hours_to_forecast, promote_model)
+# print(start_date,end_date,hours_to_forecast, promote_model)
 
 # COMMAND ----------
 
-# Introductory information
+# DBTITLE 1,Introductory information About Historic Data
 print("Starting the ETL Process for New York Weather Data and Bike Trip Data.")
 
 print("At a high-level, "
@@ -24,7 +24,7 @@ print("At a high-level, "
 
 # COMMAND ----------
 
-# Helper functions required as part of ETL
+# DBTITLE 1,Helper functions required as part of ETL
 from pyspark.sql import DataFrame
 
 def readDataFrameFromSource(path: str, file_format: str) -> DataFrame:
@@ -64,7 +64,8 @@ def writeDataFrameToDeltaTable(df: DataFrame, delta_table_name: str):
     df.write.format("delta") \
         .mode("append") \
             .option("path", delta_table_path) \
-                .saveAsTable(delta_table_name)
+                .option("checkpointLocation", GROUP_DATA_PATH + "_checkpoints/") \
+                    .saveAsTable(delta_table_name)
     # Check if the directory is correctly created or not
     try:
         if len(dbutils.fs.ls(delta_table_path)) >= 1: 
@@ -73,7 +74,7 @@ def writeDataFrameToDeltaTable(df: DataFrame, delta_table_name: str):
     except FileNotFoundError as e:
         print("Oops! Directory not found:", e)
 
-def registerDeltaTablesAsTemporaryView(delta_table_path: str, temporary_view_name: str):
+def registerDeltaTablesAsGlobalTemporaryView(delta_table_path: str, temporary_view_name: str):
     """
     Loads a Delta Table as a temporary view 
 
@@ -82,10 +83,11 @@ def registerDeltaTablesAsTemporaryView(delta_table_path: str, temporary_view_nam
     """
     spark.read.format("delta") \
         .load(delta_table_path) \
-            .createOrReplaceTempView(temporary_view_name)
+            .createOrReplaceGlobalTempView(temporary_view_name)
 
 # COMMAND ----------
 
+# DBTITLE 1,Cells [5-8]: Bronze Tables Processing
 # ETL for Historical Weather Data
 weather_df = readDataFrameFromSource(NYC_WEATHER_FILE_PATH, "csv")
 weather_df.printSchema()
@@ -104,10 +106,30 @@ writeDataFrameToDeltaTable(bike_df, bike_delta_table_name)
 
 # COMMAND ----------
 
+# ETL for Live Bronze Tables updated every 30 mins
+from delta.tables import DeltaTable
+
+# Load the Delta table into a DataFrame
+bronze_station_info_delta_table = DeltaTable.forName(spark, BRONZE_STATION_INFO_PATH)
+bronze_station_info_df = bronze_station_info_delta_table.toDF()
+bronze_station_info_df.printSchema()
+
+bronze_station_status_delta_table = DeltaTable.forName(spark, BRONZE_STATION_STATUS_PATH)
+bronze_station_status_df = bronze_station_status_delta_table.toDF()
+bronze_station_status_df.printSchema()
+
+bronze_nyc_weather_delta_table = DeltaTable.forName(spark, BRONZE_NYC_WEATHER_PATH)
+bronze_nyc_weather_df = bronze_nyc_weather_delta_table.toDF()
+bronze_nyc_weather_df.printSchema()
+
+# COMMAND ----------
+
 # MAGIC %sql
 # MAGIC show tables from g02_db
 
 # COMMAND ----------
+
+# DBTITLE 1,Silver Tables Processing
 
 # Register Delta tables For Historic Data as Temporary Views
 registerDeltaTablesAsTemporaryView(GROUP_DATA_PATH + weather_delta_table_name, 'historic_weather_trip_data_view')
@@ -126,6 +148,7 @@ registerDeltaTablesAsTemporaryView(BRONZE_NYC_WEATHER_PATH, 'bronze_nyc_weather_
 
 # COMMAND ----------
 
+# DBTITLE 1,Remaining Cells : Gold Tables Processing
 # Filter data using SQL query
 filtered_df_g02 = spark.sql("""
   SELECT * 
