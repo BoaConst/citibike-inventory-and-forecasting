@@ -133,25 +133,6 @@ bronze_nyc_weather_df.printSchema()
 
 # COMMAND ----------
 
-# DBTITLE 1,Silver Tables Processing
-
-# Register Delta tables For Historic Data as Temporary Views
-registerDeltaTablesAsTemporaryView(GROUP_DATA_PATH + weather_delta_table_name, 'historic_weather_trip_data_view')
-registerDeltaTablesAsTemporaryView(GROUP_DATA_PATH + bike_delta_table_name, 'historic_bike_trip_data_view')
-
-
-# Register CitiBike Bronze Data Tables as Temporary Views
-registerDeltaTablesAsTemporaryView(BRONZE_STATION_INFO_PATH, 'bronze_station_info_view')
-registerDeltaTablesAsTemporaryView(BRONZE_STATION_STATUS_PATH, 'bronze_station_status_view')
-registerDeltaTablesAsTemporaryView(BRONZE_NYC_WEATHER_PATH, 'bronze_nyc_weather_view')
-
-# COMMAND ----------
-
-# MAGIC %sql
-# MAGIC show tables from g02_db
-
-# COMMAND ----------
-
 # DBTITLE 1,Remaining Cells : Gold Tables Processing
 # Filter data using SQL query
 filtered_df_g02 = spark.sql("""
