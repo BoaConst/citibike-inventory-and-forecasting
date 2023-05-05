@@ -3,7 +3,7 @@
 
 # COMMAND ----------
 
-# Parsing the parameters provided by the main notebook
+# DBTITLE 1,Parsing the parameters provided by the main notebook
 start_date = str(dbutils.widgets.get('01.start_date'))
 end_date = str(dbutils.widgets.get('02.end_date'))
 hours_to_forecast = int(dbutils.widgets.get('03.hours_to_forecast'))
@@ -13,7 +13,7 @@ print(start_date,end_date,hours_to_forecast, promote_model)
 
 # COMMAND ----------
 
-# Introductory information
+# DBTITLE 1,Introductory information About Historic Data
 print("Starting the ETL Process for New York Weather Data and Bike Trip Data.")
 
 print("At a high-level, "
@@ -24,8 +24,20 @@ print("At a high-level, "
 
 # COMMAND ----------
 
-# Helper functions required as part of ETL
+# DBTITLE 1,Helper functions required as part of ETL
 from pyspark.sql import DataFrame
+
+def readDataFromSourceWithInferredSchema(path: str, file_format: str, df: DataFrame) -> DataFrame:
+    schema = df.schema
+
+    # Replace the DataFrame with the inferred schema
+    df = spark.read.format(file_format) \
+        .option("header", "true") \
+            .option("path", path) \
+                .schema(schema) \
+                    .load()
+    
+    return df
 
 def readDataFrameFromSource(path: str, file_format: str) -> DataFrame:
     """
@@ -41,16 +53,7 @@ def readDataFrameFromSource(path: str, file_format: str) -> DataFrame:
             .option("inferSchema", "true") \
                 .load(path)
 
-    schema = df.schema
-
-    # Replace the DataFrame with the inferred schema
-    df = spark.read.format(file_format) \
-        .option("header", "true") \
-            .option("path", path) \
-                .schema(schema) \
-                    .load()
-    
-    return df
+    return readDataFromSourceWithInferredSchema(path, file_format, df)
 
 def writeDataFrameToDeltaTable(df: DataFrame, delta_table_name: str):
     """
@@ -64,7 +67,8 @@ def writeDataFrameToDeltaTable(df: DataFrame, delta_table_name: str):
     df.write.format("delta") \
         .mode("append") \
             .option("path", delta_table_path) \
-                .saveAsTable(delta_table_name)
+                .option("checkpointLocation", GROUP_DATA_PATH + "_checkpoints/") \
+                    .saveAsTable(delta_table_name)
     # Check if the directory is correctly created or not
     try:
         if len(dbutils.fs.ls(delta_table_path)) >= 1: 
@@ -73,7 +77,13 @@ def writeDataFrameToDeltaTable(df: DataFrame, delta_table_name: str):
     except FileNotFoundError as e:
         print("Oops! Directory not found:", e)
 
-def registerDeltaTablesAsTemporaryView(delta_table_path: str, temporary_view_name: str):
+
+def readDeltaTable(delta_table_path: str) -> DataFrame:
+    df = spark.read.format("delta") \
+            .load(delta_table_path)
+    return df
+
+def registerDeltaTablesAsGlobalTemporaryView(delta_table_path: str, temporary_view_name: str):
     """
     Loads a Delta Table as a temporary view 
 
@@ -82,10 +92,11 @@ def registerDeltaTablesAsTemporaryView(delta_table_path: str, temporary_view_nam
     """
     spark.read.format("delta") \
         .load(delta_table_path) \
-            .createOrReplaceTempView(temporary_view_name)
+            .createOrReplaceGlobalTempView(temporary_view_name)
 
 # COMMAND ----------
 
+# DBTITLE 1,Cells [5-8]: Bronze Tables Processing
 # ETL for Historical Weather Data
 weather_df = readDataFrameFromSource(NYC_WEATHER_FILE_PATH, "csv")
 weather_df.printSchema()
@@ -104,20 +115,16 @@ writeDataFrameToDeltaTable(bike_df, bike_delta_table_name)
 
 # COMMAND ----------
 
-# MAGIC %sql
-# MAGIC show tables from g02_db
+# DBTITLE 1,ETL for Live Bronze Tables updated every 30 mins
+# Load the Delta table into a DataFrame
+bronze_station_info_df = readDeltaTable(BRONZE_STATION_INFO_PATH) 
+bronze_station_info_df.printSchema()
 
-# COMMAND ----------
+bronze_station_status_df = readDeltaTable(BRONZE_STATION_STATUS_PATH)
+bronze_station_status_df.printSchema()
 
-# Register Delta tables For Historic Data as Temporary Views
-registerDeltaTablesAsTemporaryView(GROUP_DATA_PATH + weather_delta_table_name, 'historic_weather_trip_data_view')
-registerDeltaTablesAsTemporaryView(GROUP_DATA_PATH + bike_delta_table_name, 'historic_bike_trip_data_view')
-
-
-# Register CitiBike Bronze Data Tables as Temporary Views
-registerDeltaTablesAsTemporaryView(BRONZE_STATION_INFO_PATH, 'bronze_station_info_view')
-registerDeltaTablesAsTemporaryView(BRONZE_STATION_STATUS_PATH, 'bronze_station_status_view')
-registerDeltaTablesAsTemporaryView(BRONZE_NYC_WEATHER_PATH, 'bronze_nyc_weather_view')
+bronze_nyc_weather_df = readDeltaTable(BRONZE_NYC_WEATHER_PATH)
+bronze_nyc_weather_df.printSchema()
 
 # COMMAND ----------
 
@@ -126,18 +133,19 @@ registerDeltaTablesAsTemporaryView(BRONZE_NYC_WEATHER_PATH, 'bronze_nyc_weather_
 
 # COMMAND ----------
 
-# Filter data using SQL query
-filtered_df_g02 = spark.sql("""
-  SELECT * 
-  FROM historic_bike_trip_data_view 
-  WHERE start_station_name = 'West St & Chambers St'
-""")
+# DBTITLE 1,Remaining Cells : Gold Tables Processing
+# # Filter data using SQL query
+# filtered_df_g02 = spark.sql("""
+#   SELECT * 
+#   FROM historic_bike_trip_data_view 
+#   WHERE start_station_name = 'West St & Chambers St'
+# """)
 
-# Display filtered data
-display(filtered_df_g02)  
+# # Display filtered data
+# display(filtered_df_g02)  
 
-# Display count of dataframe
-filtered_df_g02.count()
+# # Display count of dataframe
+# filtered_df_g02.count()
 
 # COMMAND ----------
 
