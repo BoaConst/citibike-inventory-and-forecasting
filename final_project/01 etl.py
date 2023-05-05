@@ -27,6 +27,18 @@ print("At a high-level, "
 # DBTITLE 1,Helper functions required as part of ETL
 from pyspark.sql import DataFrame
 
+def readDataFromSourceWithInferredSchema(path: str, file_format: str, df: DataFrame) -> DataFrame:
+    schema = df.schema
+
+    # Replace the DataFrame with the inferred schema
+    df = spark.read.format(file_format) \
+        .option("header", "true") \
+            .option("path", path) \
+                .schema(schema) \
+                    .load()
+    
+    return df
+
 def readDataFrameFromSource(path: str, file_format: str) -> DataFrame:
     """
     Creates a Spark DataFrame from a raw data file.
@@ -41,16 +53,7 @@ def readDataFrameFromSource(path: str, file_format: str) -> DataFrame:
             .option("inferSchema", "true") \
                 .load(path)
 
-    schema = df.schema
-
-    # Replace the DataFrame with the inferred schema
-    df = spark.read.format(file_format) \
-        .option("header", "true") \
-            .option("path", path) \
-                .schema(schema) \
-                    .load()
-    
-    return df
+    return readDataFromSourceWithInferredSchema(path, file_format, df)
 
 def writeDataFrameToDeltaTable(df: DataFrame, delta_table_name: str):
     """
@@ -73,6 +76,12 @@ def writeDataFrameToDeltaTable(df: DataFrame, delta_table_name: str):
             display(dbutils.fs.ls(delta_table_path))  
     except FileNotFoundError as e:
         print("Oops! Directory not found:", e)
+
+
+def readDeltaTable(delta_table_path: str) -> DataFrame:
+    df = spark.read.format("delta") \
+            .load(delta_table_path)
+    return df
 
 def registerDeltaTablesAsGlobalTemporaryView(delta_table_path: str, temporary_view_name: str):
     """
@@ -106,20 +115,15 @@ writeDataFrameToDeltaTable(bike_df, bike_delta_table_name)
 
 # COMMAND ----------
 
-# ETL for Live Bronze Tables updated every 30 mins
-from delta.tables import DeltaTable
-
+# DBTITLE 1,ETL for Live Bronze Tables updated every 30 mins
 # Load the Delta table into a DataFrame
-bronze_station_info_delta_table = DeltaTable.forName(spark, BRONZE_STATION_INFO_PATH)
-bronze_station_info_df = bronze_station_info_delta_table.toDF()
+bronze_station_info_df = readDeltaTable(BRONZE_STATION_INFO_PATH) 
 bronze_station_info_df.printSchema()
 
-bronze_station_status_delta_table = DeltaTable.forName(spark, BRONZE_STATION_STATUS_PATH)
-bronze_station_status_df = bronze_station_status_delta_table.toDF()
+bronze_station_status_df = readDeltaTable(BRONZE_STATION_STATUS_PATH)
 bronze_station_status_df.printSchema()
 
-bronze_nyc_weather_delta_table = DeltaTable.forName(spark, BRONZE_NYC_WEATHER_PATH)
-bronze_nyc_weather_df = bronze_nyc_weather_delta_table.toDF()
+bronze_nyc_weather_df = readDeltaTable(BRONZE_NYC_WEATHER_PATH)
 bronze_nyc_weather_df.printSchema()
 
 # COMMAND ----------
