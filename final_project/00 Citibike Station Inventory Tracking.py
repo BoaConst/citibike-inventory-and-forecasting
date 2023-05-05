@@ -8,9 +8,18 @@
 
 # COMMAND ----------
 
+import json
+
+# Run the initialize group environment at the start to refresh all the data directories and database tables
+result = dbutils.notebook.run("initialize_group_environment", 3600)
+
+# Check the results
+assert json.loads(result)["exit_code"] == "OK", "Data Preparation Failed!" # Check to see that it worked
+
+# COMMAND ----------
+
 from datetime import datetime as dt
 from datetime import timedelta
-import json
 
 dbutils.widgets.removeAll()
 
