@@ -134,18 +134,18 @@ bronze_nyc_weather_df.printSchema()
 # COMMAND ----------
 
 # DBTITLE 1,Remaining Cells : Gold Tables Processing
-# Filter data using SQL query
-filtered_df_g02 = spark.sql("""
-  SELECT * 
-  FROM historic_bike_trip_data_view 
-  WHERE start_station_name = 'West St & Chambers St'
-""")
+# # Filter data using SQL query
+# filtered_df_g02 = spark.sql("""
+#   SELECT * 
+#   FROM historic_bike_trip_data_view 
+#   WHERE start_station_name = 'West St & Chambers St'
+# """)
 
-# Display filtered data
-display(filtered_df_g02)  
+# # Display filtered data
+# display(filtered_df_g02)  
 
-# Display count of dataframe
-filtered_df_g02.count()
+# # Display count of dataframe
+# filtered_df_g02.count()
 
 # COMMAND ----------
 
