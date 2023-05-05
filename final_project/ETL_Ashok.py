@@ -130,23 +130,42 @@ delta_path = "dbfs:/FileStore/tables/G02/historic_bike_trip_ashok/"
 spark.read.format("delta").load(delta_path).createOrReplaceTempView("bike_trip_history_delta")
 
 # Filter data using SQL query
-filtered_df_g02 = spark.sql("""
+starting_df_g02 = spark.sql("""
   SELECT * 
   FROM bike_trip_history_delta 
   WHERE start_station_name = {}
 """.format("'{}'".format(GROUP_STATION_ASSIGNMENT)))
 
 # Display filtered data
-display(filtered_df_g02)  
+display(starting_df_g02)  
 
 # Display count of dataframe
-filtered_df_g02.count()
+starting_df_g02.count()
+
+
+
+# Filter data using SQL query
+ending_df_g02 = spark.sql("""
+  SELECT * 
+  FROM bike_trip_history_delta 
+  WHERE end_station_name = {}
+""".format("'{}'".format(GROUP_STATION_ASSIGNMENT)))
+
+# Display filtered data
+display(ending_df_g02)  
+
+# Display count of dataframe
+ending_df_g02.count()
 
 # COMMAND ----------
 
 # Write the dataframe to bronze delta table
-delta_table_name = 'historic_bike_trip_g02_ashok'
-filtered_df_g02.write.format("delta").mode("append").option("path", GROUP_DATA_PATH + delta_table_name).saveAsTable(delta_table_name)
+delta_table_name = 'historic_bike_trip_starting_g02_ashok'
+starting_df_g02.write.format("delta").mode("append").option("path", GROUP_DATA_PATH + delta_table_name).saveAsTable(delta_table_name)
+
+# Write the dataframe to bronze delta table
+delta_table_name = 'historic_bike_trip_ending_g02_ashok'
+ending_df_g02.write.format("delta").mode("append").option("path", GROUP_DATA_PATH + delta_table_name).saveAsTable(delta_table_name)
 
 # COMMAND ----------
 
