@@ -158,6 +158,10 @@ def extractDateHourFromDataFrame(df: DataFrame, dateColName: str) -> DataFrame:
 
 # COMMAND ----------
 
+display(GROUP_STATION_ASSIGNMENT)
+
+# COMMAND ----------
+
 # MAGIC %md
 # MAGIC <h1> Bronze Data ETL Pipeline <h1>
 
@@ -203,6 +207,22 @@ display(historic_bike_trips_for_ending_station_df)
 
 nyc_historical_ending_bike_delta_table_name = 'nyc_historical_ending_bike_trip_data'
 writeDataFrameToDeltaTableOptimized(historic_bike_trips_for_ending_station_df, nyc_historical_ending_bike_delta_table_name, "month", "date, hour")
+
+# COMMAND ----------
+
+bike_start_df = readDeltaTable(GROUP_DATA_PATH+"nyc_historical_starting_bike_trip_data", False) 
+bike_end_df = readDeltaTable(GROUP_DATA_PATH+"nyc_historical_ending_bike_trip_data", False) 
+
+# COMMAND ----------
+
+def createSilverTableForBikes(starting_bike_df,ending_bike_df):
+    starting_rides_per_hour = starting_bike_df.groupBy("date", hour("started_at").alias("hour") ).count()
+    ending_rides_per_hour = ending_bike_df.groupBy("date", hour("ended_at").alias("hour") ).count()
+
+    starting_rides_per_hour = starting_rides_per_hour.withColumnRenamed("count", "start_ride_count")
+
+    ending_rides_per_hour = ending_rides_per_hour.withColumnRenamed("count", "end_ride_count")
+
 
 # COMMAND ----------
 
