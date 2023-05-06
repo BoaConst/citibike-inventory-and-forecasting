@@ -150,7 +150,16 @@ def extractDateHourFromDataFrame(df: DataFrame, dateColName: str) -> DataFrame:
                 .withColumn("date", to_date("full_date")) \
                     .withColumn("hour", hour("full_date")) \
                         .withColumn("month", month("full_date")) \
-                            .drop(dateColName) \
+                                .drop("timestamp") \
+                                    .drop("full_date")
+            
+    return df
+
+def extractDateHourFromDataFrame1(df: DataFrame, dateColName: str) -> DataFrame:
+    df = df.withColumn("full_date", date_format(dateColName, "yyyy-MM-dd HH:mm:ss")) \
+                .withColumn("date", to_date("full_date")) \
+                    .withColumn("hour", hour("full_date")) \
+                        .withColumn("month", month("full_date")) \
                                 .drop("timestamp") \
                                     .drop("full_date")
             
@@ -264,14 +273,14 @@ historic_bike_trips_for_ending_station_df = bike_df.filter(F.col('end_station_na
 # COMMAND ----------
 
 # Transform the started_at for starting_df. This will ensure we have independent date and hour columns to z-order. We plan to partition the delta table by month to have a manageable directory size.
-historic_bike_trips_for_starting_station_df = extractDateHourFromDataFrame(historic_bike_trips_for_starting_station_df, "started_at")
+historic_bike_trips_for_starting_station_df = extractDateHourFromDataFrame1(historic_bike_trips_for_starting_station_df, "started_at")
 display(historic_bike_trips_for_starting_station_df)
 
 nyc_historical_starting_bike_delta_table_name = 'Silver_nyc_historical_G02_starting_bike_trip_data'
 writeDataFrameToDeltaTableOptimized(historic_bike_trips_for_starting_station_df, nyc_historical_starting_bike_delta_table_name, "month", "date, hour")
 
 # Transform the ended_at field ending_df. This will ensure we have independent date and hour columns to z-order. We plan to partition the delta table by month to have a manageable directory size.
-historic_bike_trips_for_ending_station_df = extractDateHourFromDataFrame(historic_bike_trips_for_ending_station_df, "ended_at")
+historic_bike_trips_for_ending_station_df = extractDateHourFromDataFrame1(historic_bike_trips_for_ending_station_df, "ended_at")
 display(historic_bike_trips_for_ending_station_df)
 
 nyc_historical_ending_bike_delta_table_name = 'Silver_nyc_historical_G02_ending_bike_trip_data'
@@ -302,7 +311,90 @@ writeDataFrameToDeltaTable(bronze_station_status_df, station_status_delta_table_
 # COMMAND ----------
 
 # DBTITLE 1,Combining Historic Weather and Bike Trips Data for EDA
+# Drop duplicates from historic files
+historic_bike_trips_for_starting_station_df = historic_bike_trips_for_starting_station_df.dropDuplicates(["ride_id"])
+historic_bike_trips_for_ending_station_df = historic_bike_trips_for_ending_station_df.dropDuplicates(["ride_id"])
+weather_df = weather_df.dropDuplicates(["date", "hour"])
 
+# COMMAND ----------
+
+# Aggregate the starting and ending historic bike trip 
+starting_rides_per_hour = historic_bike_trips_for_starting_station_df.groupBy("date", "hour").count()
+ending_rides_per_hour = historic_bike_trips_for_ending_station_df.groupBy("date", "hour").count()
+
+starting_rides_per_hour = starting_rides_per_hour.withColumnRenamed("count", "start_ride_count")
+ending_rides_per_hour = ending_rides_per_hour.withColumnRenamed("count", "end_ride_count")
+
+# COMMAND ----------
+
+display(starting_rides_per_hour.orderBy("date", "hour"))
+
+# COMMAND ----------
+
+from pyspark.sql.functions import hour, expr
+
+# Define the range of dates
+from pyspark.sql.functions import min,max
+
+start_date = starting_rides_per_hour.agg(min("date")).collect()[0][0]
+end_date = ending_rides_per_hour.agg(max("date")).collect()[0][0]
+
+display(start_date)
+display(end_date)
+
+# Create a DataFrame with all the possible date-hour combinations
+dates_df = spark.range(0, (pd.to_datetime(end_date) - pd.to_datetime(start_date)).days + 1) \
+               .withColumn("date", expr("date_add('{}', CAST(id AS int))".format(start_date)))
+hours_df = spark.range(0, 24).withColumn("hour_of_day", hour(expr("timestamp('2000-01-01 ' || id || ':00:00')")))
+all_hours_df = dates_df.crossJoin(hours_df) \
+                       .withColumn("date", expr("date_format(date, 'yyyy-MM-dd')"))
+
+# Display the result
+all_hours_df = all_hours_df.drop("id")
+all_hours_df = all_hours_df.withColumnRenamed("hour_of_day", "hour")
+
+display(all_hours_df)
+
+# COMMAND ----------
+
+display(all_hours_df.orderBy("date", "hour"))
+
+# COMMAND ----------
+
+# Join weather and bike trips aggregated data with all_hours_df
+Data_modelling_df = all_hours_df.join(starting_rides_per_hour, ["date", "hour"], "left_outer") \
+                        .fillna(0, subset=["start_ride_count"]) \
+                        .orderBy("date", "hour")
+
+Data_modelling_df = Data_modelling_df.join(ending_rides_per_hour, ["date", "hour"], "left_outer") \
+                        .fillna(0, subset=["end_ride_count"]) \
+                        .orderBy("date", "hour")
+
+Data_modelling_df = Data_modelling_df.withColumn("net_change", result_df["end_ride_count"] - result_df["start_ride_count"])
+
+display(Data_modelling_df.orderBy("date", "hour"))
+
+
+# COMMAND ----------
+
+from pyspark.sql.functions import col, avg, mode
+from pyspark.sql.functions import date_format, dayofweek,when
+
+# Select columns with integer and string data types
+int_cols = ["temp","feels_like","pressure","humidity","dew_point","uvi","clouds","visibility","wind_speed","wind_deg","pop","snow_1h","rain_1h"]
+str_cols = ["main","description"]
+
+# Group by date and hour and compute average and mode of columns
+grouped_weather_df = weather_df_with_date.groupBy("date", "hour").agg(
+    *[avg(col).alias(col) for col in int_cols],
+    *[mode(col).alias(col) for col in str_cols]
+)
+
+# Show the resulting dataframe
+grouped_weather_df = grouped_weather_df.withColumn("day_of_week", dayofweek("date")) \
+                                       .withColumn("is_weekend", when(dayofweek("date").isin([7,1]), 1).otherwise(0))
+
+display(grouped_weather_df.orderBy("date","hour"))
 
 # COMMAND ----------
 
