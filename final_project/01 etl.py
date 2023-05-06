@@ -3,9 +3,6 @@
 
 # COMMAND ----------
 
-
-
-
 start_date = str(dbutils.widgets.get('01.start_date'))
 end_date = str(dbutils.widgets.get('02.end_date'))
 hours_to_forecast = int(dbutils.widgets.get('03.hours_to_forecast'))
@@ -16,14 +13,9 @@ print("YOUR CODE HERE...")
 
 # COMMAND ----------
 
-
-NYC_WEATHER_FILE_PATH
-
-# COMMAND ----------
-
 # Check for files in weather data path
 import os
-dbutils.fs.ls("dbfs:/FileStore/tables/raw/weather/")
+display(dbutils.fs.ls(GROUP_DATA_PATH))
 
 
 # COMMAND ----------
