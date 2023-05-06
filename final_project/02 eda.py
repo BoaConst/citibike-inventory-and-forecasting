@@ -13,7 +13,11 @@ print("YOUR CODE HERE...")
 
 # COMMAND ----------
 
-# Read the filtered data for visualization
+display(dbutils.fs.ls(GROUP_DATA_PATH))
+
+# COMMAND ----------
+
+  # Read the filtered data for visualization
 delta_path = "dbfs:/FileStore/tables/G02/historic_bike_trip_g02/"
 
 # Create df from the delta table
