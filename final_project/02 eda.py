@@ -3,13 +3,31 @@
 
 # COMMAND ----------
 
-start_date = str(dbutils.widgets.get('01.start_date'))
-end_date = str(dbutils.widgets.get('02.end_date'))
-hours_to_forecast = int(dbutils.widgets.get('03.hours_to_forecast'))
-promote_model = bool(True if str(dbutils.widgets.get('04.promote_model')).lower() == 'yes' else False)
+# start_date = str(dbutils.widgets.get('01.start_date'))
+# end_date = str(dbutils.widgets.get('02.end_date'))
+# hours_to_forecast = int(dbutils.widgets.get('03.hours_to_forecast'))
+# promote_model = bool(True if str(dbutils.widgets.get('04.promote_model')).lower() == 'yes' else False)
 
-print(start_date,end_date,hours_to_forecast, promote_model)
-print("YOUR CODE HERE...")
+# print(start_date,end_date,hours_to_forecast, promote_model)
+# print("YOUR CODE HERE...")
+
+# COMMAND ----------
+
+# DBTITLE 1,Helper Functions for EDA
+import matplotlib.pyplot as plt
+import pandas as pd
+
+def plot_spark_dataframe(df, x_col, y_col, plot_type, title):
+    # Convert Spark DataFrame to Pandas DataFrame
+    pandas_df = df.select(x_col, y_col).toPandas()
+
+    # Plot the Pandas DataFrame
+    pandas_df.plot(x=x_col, y=y_col, kind=plot_type)
+
+    plt.title(title)
+
+    # Display the plot
+    plt.show()
 
 # COMMAND ----------
 
@@ -23,6 +41,11 @@ display(dbutils.fs.ls(GROUP_DATA_PATH))
 table_name = 'Silver_G02_modelling_data'
 G02_bike_trip_df = spark.read.format("delta").load(GROUP_DATA_PATH + table_name)
 display(G02_bike_trip_df.limit(10))
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC <h1> Monthly Trip Trends for G02: West St & Chambers St	</h1>
 
 # COMMAND ----------
 
@@ -46,7 +69,14 @@ df_monthly_trips = df_monthly_trips.withColumn("year_month",
 
 # COMMAND ----------
 
+plot_spark_dataframe(df_monthly_trips, "year_month", "Number of Bike Trips started", "bar", "Monthly Trends for the Outgoing Bikes")
+plot_spark_dataframe(df_monthly_trips, "year_month", "Number of Bike Trips ended", "bar", "Monthly Trends for the Incoming Bikes")
 display(df_monthly_trips)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC <h1> Daily Trip Trends for G02: West St & Chambers St	</h1>
 
 # COMMAND ----------
 
@@ -63,7 +93,14 @@ df_daily_trips_line = df_daily_trips.groupBy("date").agg(sum("start_ride_count")
 
 # COMMAND ----------
 
+plot_spark_dataframe(df_daily_trips_line, "date", "Number of Bike Trips started", "bar", "Monthly Trends for the Outgoing Bikes")
+plot_spark_dataframe(df_daily_trips_line, "date", "Number of Bike Trips ended", "bar", "Monthly Trends for the Incoming Bikes")
 display(df_daily_trips_line)
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC Select * FROM g02_db.gold_g02_modelling_data
 
 # COMMAND ----------
 
@@ -129,11 +166,13 @@ display(G02_bike_trip_df)
 
 # COMMAND ----------
 
+from pyspark.sql import Window
+
 # Define the WindowSpec object by partitioning and ordering the data
 window_spec = Window.partitionBy().orderBy("temp")
 
 # Filter `df_daily_weather` to include only data from 2022
-df_daily_2022 = G02_bike_trip_df.filter(year(col("weather_date")) == 2022)
+df_daily_2022 = G02_bike_trip_df.filter(year(col("date")) == 2022)
 
 # Divide the temperatures into three groups
 df_weather_2022 = df_daily_weather_2022.withColumn("temp_group", ntile(3).over(window_spec))
