@@ -221,5 +221,5 @@ bronze_nyc_weather_df = readDeltaTable(BRONZE_NYC_WEATHER_PATH, True)
 
 import json
 
-# Return Success
+# Return Success Code
 dbutils.notebook.exit(json.dumps({"exit_code": "OK"}))
