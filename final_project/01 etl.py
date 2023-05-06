@@ -370,7 +370,7 @@ Data_modelling_df = Data_modelling_df.join(ending_rides_per_hour, ["date", "hour
                         .fillna(0, subset=["end_ride_count"]) \
                         .orderBy("date", "hour")
 
-Data_modelling_df = Data_modelling_df.withColumn("net_change", result_df["end_ride_count"] - result_df["start_ride_count"])
+Data_modelling_df = Data_modelling_df.withColumn("net_change", Data_modelling_df["end_ride_count"] - Data_modelling_df["start_ride_count"])
 
 display(Data_modelling_df.orderBy("date", "hour"))
 
@@ -384,8 +384,8 @@ from pyspark.sql.functions import date_format, dayofweek,when
 int_cols = ["temp","feels_like","pressure","humidity","dew_point","uvi","clouds","visibility","wind_speed","wind_deg","pop","snow_1h","rain_1h"]
 str_cols = ["main","description"]
 
-# Group by date and hour and compute average and mode of columns
-grouped_weather_df = weather_df_with_date.groupBy("date", "hour").agg(
+# Group by date and hour and compute average and mode for integer and string columns respectively
+grouped_weather_df = weather_df.groupBy("date", "hour").agg(
     *[avg(col).alias(col) for col in int_cols],
     *[mode(col).alias(col) for col in str_cols]
 )
@@ -398,7 +398,62 @@ display(grouped_weather_df.orderBy("date","hour"))
 
 # COMMAND ----------
 
+from pyspark.sql.functions import col
+
+# Joining with grouped weather data for final dataframe for modelling
+Data_modelling_df = grouped_weather_df.join(Data_modelling_df, ["date", "hour"], "left_outer")
+display(Data_modelling_df.orderBy("date","hour"))
+Data_modelling_df.printSchema()
+
+# COMMAND ----------
+
+from pyspark.sql import functions as F
+from pyspark.sql.functions import col, count, desc
+
+# Loop through all columns in the dataframe and filter out rows with null values
+Data_modelling_df = Data_modelling_df.dropna(subset=['net_change'])
+for col_name in Data_modelling_df.columns:
+    null_count = Data_modelling_df.filter(F.col(col_name).isNull()).count()
+    if null_count > 0:
+        print("Column '{}' has {} null values".format(col_name, null_count))
+    else:
+        print("Column '{}' has no null values".format(col_name))
+
+# Replace the null with its mode value
+mode = Data_modelling_df.groupBy("visibility").agg(count("*").alias("count")).orderBy(desc("count")).first()[0]
+
+Data_modelling_df = Data_modelling_df.fillna(mode, subset=["visibility"])
+
+# COMMAND ----------
+
+# Making the hour column consistent length
+from pyspark.sql.functions import concat, lit, to_timestamp,col,lpad
+
+Data_modelling_df = Data_modelling_df.withColumn(
+    "hour", lpad(col("hour").cast("string"), 2, "0")
+)
+
+Data_modelling_df = Data_modelling_df.withColumn('date_hour', concat('date', lit(' '), 'hour', lit(':00')))
+Data_modelling_df = Data_modelling_df.withColumn('timestamp', to_timestamp('date_hour', 'yyyy-MM-dd HH:mm'))
+Data_modelling_df = Data_modelling_df.drop("date_hour")
+
+display(Data_modelling_df)
+
+Data_modelling_df.printSchema()
+
+# COMMAND ----------
+
+display(Data_modelling_df.orderBy("date","hour"))
+
+# COMMAND ----------
+
 display(dbutils.fs.ls(GROUP_DATA_PATH))
+
+# COMMAND ----------
+
+# Write final dataset for modelling to Delta table
+data_for_modelling_table_name = 'Silver_G02_modelling_data'
+writeDataFrameToDeltaTable(Data_modelling_df, data_for_modelling_table_name)
 
 # COMMAND ----------
 
