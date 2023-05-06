@@ -215,35 +215,6 @@ writeDataFrameToDeltaTable(bike_df, nyc_historical_bike_delta_table_name)
 
 # COMMAND ----------
 
-# Print the total number of row in the raw data file
-print("Bronze Station info delta files read-in was successful! "
-        f"There are a total of {(bronze_station_info_df.count())} lines ")
-
-print("Bronze Station Status delta files read-in was successful! "
-        f"There are a total of {(bronze_station_status_df.count())} lines ")
-
-print("Bronze NYC Weather delta files read-in was successful! "
-        f"There are a total of {(bronze_nyc_weather_df.count())} lines ")
-
-# COMMAND ----------
-
-# # Write raw data files to Bronze Tables
-# station_info_delta_table_name = 'Bronze_station_info_data'
-# writeDataFrameToDeltaTable(bronze_station_info_df, station_info_delta_table_name)
-
-# station_status_delta_table_name = 'Bronze_station_status_data'
-# writeDataFrameToDeltaTable(bronze_station_status_df, station_status_delta_table_name)
-
-# nyc_weather_delta_table_name = 'Bronze_live_nyc_weather_data'
-# writeDataFrameToDeltaTable(bronze_nyc_weather_df, nyc_weather_delta_table_name)
-
-# COMMAND ----------
-
-# Check if all the bronze tables are present
-display(dbutils.fs.ls(GROUP_DATA_PATH))
-
-# COMMAND ----------
-
 # MAGIC %md
 # MAGIC <h1> Silver Data ETL Pipeline <h1>
 
@@ -443,6 +414,18 @@ bronze_nyc_weather_df = readDeltaTable(BRONZE_NYC_WEATHER_PATH, False)
 
 # COMMAND ----------
 
+# Print the total number of row in the raw data file
+print("Bronze Station info delta files read-in was successful! "
+        f"There are a total of {(bronze_station_info_df.count())} lines ")
+
+print("Bronze Station Status delta files read-in was successful! "
+        f"There are a total of {(bronze_station_status_df.count())} lines ")
+
+print("Bronze NYC Weather delta files read-in was successful! "
+        f"There are a total of {(bronze_nyc_weather_df.count())} lines ")
+
+# COMMAND ----------
+
 # DBTITLE 1,Transformations and filtering of Live Station info and status Data
 from pyspark.sql.functions import col, lead, asc
 from pyspark.sql.window import Window
@@ -516,7 +499,7 @@ display(Data_modelling_live_df)
 
 # Write the refined dataframe to a gold table
 live_data_for_modelling_table_name = 'Gold_G02_modelling_data'
-writeDataFrameToDeltaTableOptimized(Data_modelling_live_df, live_data_for_modelling_table_name, "date", "date, hour")
+writeDataFrameToDeltaTableOptimized(Data_modelling_live_df, live_data_for_modelling_table_name, "date", "hour")
 
 # COMMAND ----------
 
