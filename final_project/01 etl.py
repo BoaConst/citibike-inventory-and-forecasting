@@ -296,6 +296,16 @@ bronze_station_info_df = bronze_station_info_df.filter(col("short_name") == '532
 bronze_station_status_df = bronze_station_status_df.filter(col("station_id") == '66dc0e99-0aca-11e7-82f6-3863bb44ef7c')
 bronze_station_status_df = extractDateHourFromDataFrame(bronze_station_status_df, "last_reported", False)
 
+# COMMAND ----------
+
+from pyspark.sql.functions import lag
+from pyspark.sql.window import Window
+
+bronze_station_status_df = bronze_station_status_df.withColumn("net_change", lag(col("num_bikes_available") - col("num_bikes_available")).over(Window.orderBy("date")))
+display(bronze_station_status_df)
+
+# COMMAND ----------
+
 # Write raw data files to Silver Tables
 station_info_delta_table_name = 'Silver_G02_station_info_data'
 writeDataFrameToDeltaTable(bronze_station_info_df, station_info_delta_table_name)
