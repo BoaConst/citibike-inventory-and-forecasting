@@ -4,12 +4,12 @@
 # COMMAND ----------
 
 # DBTITLE 1,Parsing the parameters provided by the main notebook
-start_date = str(dbutils.widgets.get('01.start_date'))
-end_date = str(dbutils.widgets.get('02.end_date'))
-hours_to_forecast = int(dbutils.widgets.get('03.hours_to_forecast'))
-promote_model = bool(True if str(dbutils.widgets.get('04.promote_model')).lower() == 'yes' else False)
+# start_date = str(dbutils.widgets.get('01.start_date'))
+# end_date = str(dbutils.widgets.get('02.end_date'))
+# hours_to_forecast = int(dbutils.widgets.get('03.hours_to_forecast'))
+# promote_model = bool(True if str(dbutils.widgets.get('04.promote_model')).lower() == 'yes' else False)
 
-print(start_date,end_date,hours_to_forecast, promote_model)
+# print(start_date,end_date,hours_to_forecast, promote_model)
 
 # COMMAND ----------
 
@@ -144,8 +144,12 @@ def registerDeltaTablesAsTemporaryView(delta_table_path: str, temporary_view_nam
         .load(delta_table_path) \
             .createOrReplaceTempView(temporary_view_name)
 
-def extractDateHourFromDataFrame(df: DataFrame, dateColName: str) -> DataFrame:
-    df = df.withColumn("timestamp", to_timestamp(from_unixtime(df[dateColName]))) \
+def extractDateHourFromDataFrame(df: DataFrame, dateColName: str, isUnixTime: bool) -> DataFrame:
+    if(isUnixTime):
+        df = df.withColumn("timestamp", to_timestamp(from_unixtime(df[dateColName])))
+    else:
+        df = df.withColumn("timestamp", to_timestamp(df[dateColName]))
+    df = df \
             .withColumn("full_date", date_format("timestamp", "yyyy-MM-dd HH:mm:ss")) \
                 .withColumn("date", to_date("full_date")) \
                     .withColumn("hour", hour("full_date")) \
@@ -221,15 +225,15 @@ print("Bronze NYC Weather delta files read-in was successful! "
 
 # COMMAND ----------
 
-# Write raw data files to Bronze Tables
-station_info_delta_table_name = 'Bronze_station_info_data'
-writeDataFrameToDeltaTable(bronze_station_info_df, station_info_delta_table_name)
+# # Write raw data files to Bronze Tables
+# station_info_delta_table_name = 'Bronze_station_info_data'
+# writeDataFrameToDeltaTable(bronze_station_info_df, station_info_delta_table_name)
 
-station_status_delta_table_name = 'Bronze_station_status_data'
-writeDataFrameToDeltaTable(bronze_station_status_df, station_status_delta_table_name)
+# station_status_delta_table_name = 'Bronze_station_status_data'
+# writeDataFrameToDeltaTable(bronze_station_status_df, station_status_delta_table_name)
 
-nyc_weather_delta_table_name = 'Bronze_live_nyc_weather_data'
-writeDataFrameToDeltaTable(bronze_nyc_weather_df, nyc_weather_delta_table_name)
+# nyc_weather_delta_table_name = 'Bronze_live_nyc_weather_data'
+# writeDataFrameToDeltaTable(bronze_nyc_weather_df, nyc_weather_delta_table_name)
 
 # COMMAND ----------
 
@@ -245,7 +249,7 @@ display(dbutils.fs.ls(GROUP_DATA_PATH))
 
 # DBTITLE 1,Transformations on Historic Weather Data
 # Transform the dt field so as to have independent date and hour columns. We plan to partition the delta table by month to have a manageable directory size.
-weather_df = extractDateHourFromDataFrame(weather_df, "dt")
+weather_df = extractDateHourFromDataFrame(weather_df, "dt", True)
 display(weather_df)
 
 # Write to a delta table partitioned by the month and z-ordered by date and hour
@@ -264,14 +268,14 @@ historic_bike_trips_for_ending_station_df = bike_df.filter(F.col('end_station_na
 # COMMAND ----------
 
 # Transform the started_at for starting_df. This will ensure we have independent date and hour columns to z-order. We plan to partition the delta table by month to have a manageable directory size.
-historic_bike_trips_for_starting_station_df = extractDateHourFromDataFrame(historic_bike_trips_for_starting_station_df, "started_at")
+historic_bike_trips_for_starting_station_df = extractDateHourFromDataFrame(historic_bike_trips_for_starting_station_df, "started_at", False)
 display(historic_bike_trips_for_starting_station_df)
 
 nyc_historical_starting_bike_delta_table_name = 'Silver_nyc_historical_G02_starting_bike_trip_data'
 writeDataFrameToDeltaTableOptimized(historic_bike_trips_for_starting_station_df, nyc_historical_starting_bike_delta_table_name, "month", "date, hour")
 
 # Transform the ended_at field ending_df. This will ensure we have independent date and hour columns to z-order. We plan to partition the delta table by month to have a manageable directory size.
-historic_bike_trips_for_ending_station_df = extractDateHourFromDataFrame(historic_bike_trips_for_ending_station_df, "ended_at")
+historic_bike_trips_for_ending_station_df = extractDateHourFromDataFrame(historic_bike_trips_for_ending_station_df, "ended_at", False)
 display(historic_bike_trips_for_ending_station_df)
 
 nyc_historical_ending_bike_delta_table_name = 'Silver_nyc_historical_G02_ending_bike_trip_data'
@@ -290,14 +294,14 @@ from pyspark.sql.functions import col
 # Filter the live tables for the assigned station
 bronze_station_info_df = bronze_station_info_df.filter(col("short_name") == '5329.03')
 bronze_station_status_df = bronze_station_status_df.filter(col("station_id") == '66dc0e99-0aca-11e7-82f6-3863bb44ef7c')
-bronze_station_status_df = extractDateHourFromDataFrame(bronze_station_status_df, "last_reported")
+bronze_station_status_df = extractDateHourFromDataFrame(bronze_station_status_df, "last_reported", False)
 
 # Write raw data files to Silver Tables
 station_info_delta_table_name = 'Silver_G02_station_info_data'
 writeDataFrameToDeltaTable(bronze_station_info_df, station_info_delta_table_name)
 
 station_status_delta_table_name = 'Silver_G02_station_status_data'
-writeDataFrameToDeltaTable(bronze_station_status_df, station_status_delta_table_name)
+writeDataFrameToDeltaTableOptimized(bronze_station_status_df, station_status_delta_table_name, "month", "date, hour")
 
 # COMMAND ----------
 
