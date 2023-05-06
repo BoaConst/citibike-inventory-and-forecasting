@@ -18,8 +18,8 @@ print("Starting the ETL Process for New York Weather Data and Bike Trip Data.")
 
 print("At a high-level, "
         f"there are {len(dbutils.fs.ls(NYC_WEATHER_FILE_PATH))} and "
-            f"{len(dbutils.fs.ls(BIKE_TRIP_DATA_PATH))} no. of files "
-                "containing the raw data for New York Weather Data & "
+            f"{len(dbutils.fs.ls(BIKE_TRIP_DATA_PATH))} raw historic data files "
+                "for New York Weather Data & "
                     "Bike Trip Data respectively.")
 
 # COMMAND ----------
@@ -95,7 +95,7 @@ def writeDataFrameToDeltaTableOptimized(df: DataFrame, delta_table_name: str, pa
     checkpoints_dir = GROUP_DATA_PATH + "_checkpoints/"
 
     spark.sql(f"""
-        CREATE TABLE {delta_table_name}
+        CREATE TABLE IF NOT EXISTS {delta_table_name}
         USING delta
         LOCATION '{delta_table_path}'
         PARTITIONED BY ({partitionByColumnName})
@@ -114,7 +114,8 @@ def writeDataFrameToDeltaTableOptimized(df: DataFrame, delta_table_name: str, pa
 
     # Check if the Delta Tables were correctly created or not
     try:
-        if len(dbutils.fs.ls(delta_table_path)) >= 1: 
+        if len(dbutils.fs.ls(delta_table_path)) >= 1:
+            print("Delta tables were successfully created!") 
             print("Directory created : ", delta_table_path)    
             display(dbutils.fs.ls(delta_table_path))  
     except FileNotFoundError as e:
@@ -163,28 +164,100 @@ def extractDateHourFromDataFrame(df: DataFrame, dateColName: str) -> DataFrame:
 
 # COMMAND ----------
 
-# DBTITLE 1,ETL for Historical Weather and Bike Trip Data
+# DBTITLE 1,Bronze Tables for Historical Weather and Bike Trip Data
 from pyspark.sql.functions import to_timestamp, to_date, from_unixtime, date_format, hour, month
 
-# ETL for Historical Weather Data
+# Read Historical Weather Data
 weather_df = readDataFrameFromSource(NYC_WEATHER_FILE_PATH, "csv")
 
 # COMMAND ----------
 
+# Print the total number of row in the raw data file
+print("Historic Weather data files read-in was successful! "
+        f"There are a total of {(weather_df.count())} lines ")
+
+# COMMAND ----------
+
+# Write raw historic weather data to Bronze table
+weather_delta_table_name = 'Bronze_nyc_historical_weather_data'
+writeDataFrameToDeltaTable(weather_df, weather_delta_table_name) 
+
+# COMMAND ----------
+
+# Read Historical Bike Trip Data
+bike_df = readDataFrameFromSource(BIKE_TRIP_DATA_PATH, "csv")
+
+# COMMAND ----------
+
+# Print the total number of row in the raw data file
+print("Historic Bike Trip data files read-in was successful! "
+        f"There are a total of {(bike_df.count())} lines ")
+
+# COMMAND ----------
+
+# Write raw bike trips data to Bronze table
+nyc_historical_bike_delta_table_name = 'Bronze_nyc_historical_bike_trip_data'
+writeDataFrameToDeltaTable(bike_df, nyc_historical_bike_delta_table_name) 
+
+# COMMAND ----------
+
+# DBTITLE 1,Bronze Tables for Live Delta Tables updated every 30 mins
+# Load the Delta table into a DataFrame
+bronze_station_info_df = readDeltaTable(BRONZE_STATION_INFO_PATH, False)
+bronze_station_status_df = readDeltaTable(BRONZE_STATION_STATUS_PATH, False)
+bronze_nyc_weather_df = readDeltaTable(BRONZE_NYC_WEATHER_PATH, False)
+
+# COMMAND ----------
+
+# Print the total number of row in the raw data file
+print("Bronze Station info delta files read-in was successful! "
+        f"There are a total of {(bronze_station_info_df.count())} lines ")
+
+print("Bronze Station Status delta files read-in was successful! "
+        f"There are a total of {(bronze_station_status_df.count())} lines ")
+
+print("Bronze NYC Weather delta files read-in was successful! "
+        f"There are a total of {(bronze_nyc_weather_df.count())} lines ")
+
+# COMMAND ----------
+
+# Write raw data files to Bronze Tables
+station_info_delta_table_name = 'Bronze_station_info_data'
+writeDataFrameToDeltaTable(bronze_station_info_df, station_info_delta_table_name)
+
+station_status_delta_table_name = 'Bronze_station_status_data'
+writeDataFrameToDeltaTable(bronze_station_status_df, station_status_delta_table_name)
+
+nyc_weather_delta_table_name = 'Bronze_live_nyc_weather_data'
+writeDataFrameToDeltaTable(bronze_nyc_weather_df, nyc_weather_delta_table_name)
+
+# COMMAND ----------
+
+# Check if all the bronze tables are present
+display(dbutils.fs.ls(GROUP_DATA_PATH))
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC <h1> Silver Data ETL Pipeline <h1>
+
+# COMMAND ----------
+
+# DBTITLE 1,Transformations on Historic Weather Data
 # Transform the dt field so as to have independent date and hour columns. We plan to partition the delta table by month to have a manageable directory size.
 weather_df = extractDateHourFromDataFrame(weather_df, "dt")
 display(weather_df)
 
 # Write to a delta table partitioned by the month and z-ordered by date and hour
-weather_delta_table_name = 'nyc_historical_weather_data'
+weather_delta_table_name = 'Silver_nyc_historical_weather_data'
 writeDataFrameToDeltaTableOptimized(weather_df, weather_delta_table_name, "month", "date, hour")
 
 # COMMAND ----------
 
+# DBTITLE 1,Transformations and filtering on Historic Bike Trips Data
 import pyspark.sql.functions as F
 
-# ETL for Historical Bike Trip Data
-bike_df = readDataFrameFromSource(BIKE_TRIP_DATA_PATH, "csv")
+# Creating G02 station start and end datafranes
 historic_bike_trips_for_starting_station_df = bike_df.filter(F.col('start_station_name')== GROUP_STATION_ASSIGNMENT)
 historic_bike_trips_for_ending_station_df = bike_df.filter(F.col('end_station_name')== GROUP_STATION_ASSIGNMENT)
 
@@ -194,28 +267,46 @@ historic_bike_trips_for_ending_station_df = bike_df.filter(F.col('end_station_na
 historic_bike_trips_for_starting_station_df = extractDateHourFromDataFrame(historic_bike_trips_for_starting_station_df, "started_at")
 display(historic_bike_trips_for_starting_station_df)
 
-nyc_historical_starting_bike_delta_table_name = 'nyc_historical_starting_bike_trip_data'
+nyc_historical_starting_bike_delta_table_name = 'Silver_nyc_historical_G02_starting_bike_trip_data'
 writeDataFrameToDeltaTableOptimized(historic_bike_trips_for_starting_station_df, nyc_historical_starting_bike_delta_table_name, "month", "date, hour")
 
 # Transform the ended_at field ending_df. This will ensure we have independent date and hour columns to z-order. We plan to partition the delta table by month to have a manageable directory size.
 historic_bike_trips_for_ending_station_df = extractDateHourFromDataFrame(historic_bike_trips_for_ending_station_df, "ended_at")
 display(historic_bike_trips_for_ending_station_df)
 
-nyc_historical_ending_bike_delta_table_name = 'nyc_historical_ending_bike_trip_data'
+nyc_historical_ending_bike_delta_table_name = 'Silver_nyc_historical_G02_ending_bike_trip_data'
 writeDataFrameToDeltaTableOptimized(historic_bike_trips_for_ending_station_df, nyc_historical_ending_bike_delta_table_name, "month", "date, hour")
-
-# COMMAND ----------
-
-# DBTITLE 1,ETL for Live Bronze Tables updated every 30 mins
-# Load the Delta table into a DataFrame
-bronze_station_info_df = readDeltaTable(BRONZE_STATION_INFO_PATH, True)
-bronze_station_status_df = readDeltaTable(BRONZE_STATION_STATUS_PATH, True)
-bronze_nyc_weather_df = readDeltaTable(BRONZE_NYC_WEATHER_PATH, True)
 
 # COMMAND ----------
 
 # MAGIC %sql
 # MAGIC show tables from g02_db
+
+# COMMAND ----------
+
+# DBTITLE 1,Transformations and filtering of Live Station info and status Data
+from pyspark.sql.functions import col
+
+# Filter the live tables for the assigned station
+bronze_station_info_df = bronze_station_info_df.filter(col("short_name") == '5329.03')
+bronze_station_status_df = bronze_station_status_df.filter(col("station_id") == '66dc0e99-0aca-11e7-82f6-3863bb44ef7c')
+bronze_station_status_df = extractDateHourFromDataFrame(bronze_station_status_df, "last_reported")
+
+# Write raw data files to Silver Tables
+station_info_delta_table_name = 'Silver_G02_station_info_data'
+writeDataFrameToDeltaTable(bronze_station_info_df, station_info_delta_table_name)
+
+station_status_delta_table_name = 'Silver_G02_station_status_data'
+writeDataFrameToDeltaTable(bronze_station_status_df, station_status_delta_table_name)
+
+# COMMAND ----------
+
+# DBTITLE 1,Combining Historic Weather and Bike Trips Data for EDA
+
+
+# COMMAND ----------
+
+display(dbutils.fs.ls(GROUP_DATA_PATH))
 
 # COMMAND ----------
 
