@@ -154,7 +154,16 @@ def extractDateHourFromDataFrame(df: DataFrame, dateColName: str, isUnixTime: bo
                 .withColumn("date", to_date("full_date")) \
                     .withColumn("hour", hour("full_date")) \
                         .withColumn("month", month("full_date")) \
-                            .drop(dateColName) \
+                                .drop("timestamp") \
+                                    .drop("full_date")
+            
+    return df
+
+def extractDateHourFromDataFrame1(df: DataFrame, dateColName: str) -> DataFrame:
+    df = df.withColumn("full_date", date_format(dateColName, "yyyy-MM-dd HH:mm:ss")) \
+                .withColumn("date", to_date("full_date")) \
+                    .withColumn("hour", hour("full_date")) \
+                        .withColumn("month", month("full_date")) \
                                 .drop("timestamp") \
                                     .drop("full_date")
             
@@ -306,11 +315,149 @@ writeDataFrameToDeltaTableOptimized(bronze_station_status_df, station_status_del
 # COMMAND ----------
 
 # DBTITLE 1,Combining Historic Weather and Bike Trips Data for EDA
+# Drop duplicates from historic files
+historic_bike_trips_for_starting_station_df = historic_bike_trips_for_starting_station_df.dropDuplicates(["ride_id"])
+historic_bike_trips_for_ending_station_df = historic_bike_trips_for_ending_station_df.dropDuplicates(["ride_id"])
+weather_df = weather_df.dropDuplicates(["date", "hour"])
+
+# COMMAND ----------
+
+# Aggregate the starting and ending historic bike trip 
+starting_rides_per_hour = historic_bike_trips_for_starting_station_df.groupBy("date", "hour").count()
+ending_rides_per_hour = historic_bike_trips_for_ending_station_df.groupBy("date", "hour").count()
+
+starting_rides_per_hour = starting_rides_per_hour.withColumnRenamed("count", "start_ride_count")
+ending_rides_per_hour = ending_rides_per_hour.withColumnRenamed("count", "end_ride_count")
+
+# COMMAND ----------
+
+display(starting_rides_per_hour.orderBy("date", "hour"))
+
+# COMMAND ----------
+
+from pyspark.sql.functions import hour, expr
+
+# Define the range of dates
+from pyspark.sql.functions import min,max
+
+start_date = starting_rides_per_hour.agg(min("date")).collect()[0][0]
+end_date = ending_rides_per_hour.agg(max("date")).collect()[0][0]
+
+display(start_date)
+display(end_date)
+
+# Create a DataFrame with all the possible date-hour combinations
+dates_df = spark.range(0, (pd.to_datetime(end_date) - pd.to_datetime(start_date)).days + 1) \
+               .withColumn("date", expr("date_add('{}', CAST(id AS int))".format(start_date)))
+hours_df = spark.range(0, 24).withColumn("hour_of_day", hour(expr("timestamp('2000-01-01 ' || id || ':00:00')")))
+all_hours_df = dates_df.crossJoin(hours_df) \
+                       .withColumn("date", expr("date_format(date, 'yyyy-MM-dd')"))
+
+# Display the result
+all_hours_df = all_hours_df.drop("id")
+all_hours_df = all_hours_df.withColumnRenamed("hour_of_day", "hour")
+
+display(all_hours_df)
+
+# COMMAND ----------
+
+display(all_hours_df.orderBy("date", "hour"))
+
+# COMMAND ----------
+
+# Join weather and bike trips aggregated data with all_hours_df
+Data_modelling_df = all_hours_df.join(starting_rides_per_hour, ["date", "hour"], "left_outer") \
+                        .fillna(0, subset=["start_ride_count"]) \
+                        .orderBy("date", "hour")
+
+Data_modelling_df = Data_modelling_df.join(ending_rides_per_hour, ["date", "hour"], "left_outer") \
+                        .fillna(0, subset=["end_ride_count"]) \
+                        .orderBy("date", "hour")
+
+Data_modelling_df = Data_modelling_df.withColumn("net_change", Data_modelling_df["end_ride_count"] - Data_modelling_df["start_ride_count"])
+
+display(Data_modelling_df.orderBy("date", "hour"))
 
 
 # COMMAND ----------
 
+from pyspark.sql.functions import col, avg, mode
+from pyspark.sql.functions import date_format, dayofweek,when
+
+# Select columns with integer and string data types
+int_cols = ["temp","feels_like","pressure","humidity","dew_point","uvi","clouds","visibility","wind_speed","wind_deg","pop","snow_1h","rain_1h"]
+str_cols = ["main","description"]
+
+# Group by date and hour and compute average and mode for integer and string columns respectively
+grouped_weather_df = weather_df.groupBy("date", "hour").agg(
+    *[avg(col).alias(col) for col in int_cols],
+    *[mode(col).alias(col) for col in str_cols]
+)
+
+# Show the resulting dataframe
+grouped_weather_df = grouped_weather_df.withColumn("day_of_week", dayofweek("date")) \
+                                       .withColumn("is_weekend", when(dayofweek("date").isin([7,1]), 1).otherwise(0))
+
+display(grouped_weather_df.orderBy("date","hour"))
+
+# COMMAND ----------
+
+from pyspark.sql.functions import col
+
+# Joining with grouped weather data for final dataframe for modelling
+Data_modelling_df = grouped_weather_df.join(Data_modelling_df, ["date", "hour"], "left_outer")
+display(Data_modelling_df.orderBy("date","hour"))
+Data_modelling_df.printSchema()
+
+# COMMAND ----------
+
+from pyspark.sql import functions as F
+from pyspark.sql.functions import col, count, desc
+
+# Loop through all columns in the dataframe and filter out rows with null values
+Data_modelling_df = Data_modelling_df.dropna(subset=['net_change'])
+for col_name in Data_modelling_df.columns:
+    null_count = Data_modelling_df.filter(F.col(col_name).isNull()).count()
+    if null_count > 0:
+        print("Column '{}' has {} null values".format(col_name, null_count))
+    else:
+        print("Column '{}' has no null values".format(col_name))
+
+# Replace the null with its mode value
+mode = Data_modelling_df.groupBy("visibility").agg(count("*").alias("count")).orderBy(desc("count")).first()[0]
+
+Data_modelling_df = Data_modelling_df.fillna(mode, subset=["visibility"])
+
+# COMMAND ----------
+
+# Making the hour column consistent length
+from pyspark.sql.functions import concat, lit, to_timestamp,col,lpad
+
+Data_modelling_df = Data_modelling_df.withColumn(
+    "hour", lpad(col("hour").cast("string"), 2, "0")
+)
+
+Data_modelling_df = Data_modelling_df.withColumn('date_hour', concat('date', lit(' '), 'hour', lit(':00')))
+Data_modelling_df = Data_modelling_df.withColumn('timestamp', to_timestamp('date_hour', 'yyyy-MM-dd HH:mm'))
+Data_modelling_df = Data_modelling_df.drop("date_hour")
+
+display(Data_modelling_df)
+
+Data_modelling_df.printSchema()
+
+# COMMAND ----------
+
+display(Data_modelling_df.orderBy("date","hour"))
+
+# COMMAND ----------
+
 display(dbutils.fs.ls(GROUP_DATA_PATH))
+
+# COMMAND ----------
+
+# Write final dataset for modelling to Delta table
+data_for_modelling_table_name = 'Silver_G02_modelling_data'
+writeDataFrameToDeltaTable(Data_modelling_df, data_for_modelling_table_name)
 
 # COMMAND ----------
 
