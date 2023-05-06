@@ -384,7 +384,7 @@ Data_modelling_df = Data_modelling_df.withColumn('timestamp', to_timestamp('date
 Data_modelling_df = Data_modelling_df.drop("date_hour")
 
 # From our model we got to know that snow_1h, main, description, start_ride_count and end_ride_count are not really relevant from a modelling perspective. These fields don't appear in the gold table for live data. Thus we drop it!
-columns_to_drop = ["snow_1h", "main", "description", "start_ride_count", "end_ride_count"]
+columns_to_drop = ["snow_1h", "main", "description"]
 
 # Transforming Weather Live Data
 Data_modelling_df = Data_modelling_df \
@@ -426,6 +426,11 @@ print("Bronze NYC Weather delta files read-in was successful! "
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC <h1> Gold Data ETL Pipeline <h1>
+
+# COMMAND ----------
+
 # DBTITLE 1,Transformations and filtering of Live Station info and status Data
 from pyspark.sql.functions import col, lead, asc
 from pyspark.sql.window import Window
@@ -437,8 +442,6 @@ bronze_station_status_df = extractDateHourFromDataFrame(bronze_station_status_df
 bronze_nyc_weather_df = extractDateHourFromDataFrame(bronze_nyc_weather_df, "time", False)
 
 # COMMAND ----------
-
-from pyspark.sql.functions import col, lead, asc
 
 # Transforming station status table
 # Sort the DataFrame by the date column in descending order
