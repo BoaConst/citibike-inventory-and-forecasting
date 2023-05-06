@@ -13,7 +13,7 @@ from datetime import datetime
 
 # Loading weather trip data from the delta tables
 weather_df = spark.read.format("delta").load('dbfs:/FileStore/tables/G02/historic_nyc_weather_ashok/')
-bike_df = spark.read.format("delta").load('dbfs:/FileStore/tables/G02/historic_bike_trip_g02_ashok/')
+bike_df = spark.read.format("delta").load('dbfs:/FileStore/tables/G02/historic_bike_trip_starting_g02_ashok/')
 
 # COMMAND ----------
 

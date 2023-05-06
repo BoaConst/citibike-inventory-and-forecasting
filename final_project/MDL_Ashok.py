@@ -211,6 +211,8 @@ joined_df.printSchema()
 # COMMAND ----------
 
 # joined_df.write.format("delta").mode("overwrite").save(GROUP_DATA_PATH+"DataforModelling/")
+# pip install fbprophet
+!pip install fbprophet
 
 
 # COMMAND ----------
@@ -218,54 +220,194 @@ joined_df.printSchema()
 from fbprophet import Prophet
 import pyspark.sql.functions as F
 from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_absolute_percentage_error, mean_squared_error
 
 
 target_col = "net_change"
 prophet_df = joined_df.selectExpr("date_hour as ds", target_col + " as y", "temp", "feels_like", "pressure", "humidity", "wind_speed", "rain_1h")
-
 prophet_df = prophet_df.toPandas()
-# prophet_df = Prophet_Df.withColumnRenamed("timestamp", "ds").withColumnRenamed("net_change", "y")
-# import pandas as pd
-prophet_df.head()
 prophet_df['ds'] = pd.to_datetime(prophet_df['ds'])
 
-
-train_data, test_data = train_test_split(prophet_df, test_size=0.15, shuffle=False)
-
+train_data, test_data = train_test_split(prophet_df, test_size=0.05, shuffle=False)
 
 m = Prophet(daily_seasonality=True, weekly_seasonality=True, yearly_seasonality=True, seasonality_mode="multiplicative")
-m.add_regressor("temp")
-m.add_regressor("feels_like")
-m.add_regressor("pressure")
-m.add_regressor("humidity")
-m.add_regressor("wind_speed")
-m.add_regressor("rain_1h")
+# m.add_regressor("temp")
+# m.add_regressor("feels_like")
+# m.add_regressor("pressure")
+# m.add_regressor("humidity")
+# m.add_regressor("wind_speed")
+# m.add_regressor("rain_1h")
+# Add regressors
+m.add_regressor("temp", standardize=True)
+m.add_regressor("feels_like", standardize=True)
+m.add_regressor("pressure", standardize=True)
+m.add_regressor("humidity", standardize=True)
+m.add_regressor("wind_speed", standardize=True)
+m.add_regressor("rain_1h", standardize=True)
+
 m.fit(train_data)
 
-future = m.make_future_dataframe(periods=len(test_data), freq="H", include_history=False)
-test_data['ds'] = pd.to_datetime(test_data['ds'])
-future['ds'] = pd.to_datetime(future['ds'])
-
-future = future.join(test_data.drop("y", axis=1), on="ds", how="left")
+future = pd.DataFrame({
+    'ds': test_data['ds'],
+    'temp': test_data['temp'],
+    'feels_like': test_data['feels_like'],
+    'pressure': test_data['pressure'],
+    'humidity': test_data['humidity'],
+    'wind_speed': test_data['wind_speed'],
+    'rain_1h': test_data['rain_1h']
+})
 forecast = m.predict(future)
 
-# Calculate accuracy metrics
-mse = ((forecast['yhat'] - test_data['y']) ** 2).mean()
-rmse = mse ** 0.5
-mae = abs(forecast['yhat'] - test_data['y']).mean()
-mape = (abs(forecast['yhat'] - test_data['y']) / test_data['y']).mean() * 100
+# future = pd.concat([future, test_data.drop("y", axis=1)], axis=1)
+# print(future)
 
-# Print accuracy metrics
-print("Mean Squared Error:", mse)
-print("Root Mean Squared Error:", rmse)
-print("Mean Absolute Error:", mae)
-print("Mean Absolute Percentage Error:", mape)
+forecast = m.predict(future)
+
+print(forecast)
+
+
+print(test_data['y'])
+
+mape = mean_absolute_percentage_error(test_data['y'], forecast['yhat'])
+mse = mean_squared_error(test_data['y'], forecast['yhat'])
+
+print("MAPE: {:.2f}%".format(mape * 100))
+print("MSE: {:.2f}".format(mse))
 
 
 
 # COMMAND ----------
 
-train_data
+from fbprophet import Prophet
+import pandas as pd
+import numpy as np
+import pyspark.sql.functions as F
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_absolute_percentage_error, mean_squared_error
+from fbprophet.diagnostics import cross_validation, performance_metrics
+from fbprophet.plot import plot_cross_validation_metric
+from hyperopt import fmin, tpe, hp
+
+# ... (your existing code for loading and preprocessing the data)
+target_col = "net_change"
+prophet_df = joined_df.selectExpr("date_hour as ds", target_col + " as y", "temp", "pressure", "humidity", "wind_speed")
+prophet_df = prophet_df.toPandas()
+prophet_df['ds'] = pd.to_datetime(prophet_df['ds'])
+
+train_data, test_data = train_test_split(prophet_df, test_size=0.10, shuffle=False)
+
+
+def train_and_evaluate(params):
+    m = Prophet(
+        daily_seasonality=params["daily_seasonality"],
+        weekly_seasonality=params["weekly_seasonality"],
+        yearly_seasonality=params["yearly_seasonality"],
+        seasonality_mode=params["seasonality_mode"],
+        changepoint_prior_scale=params["changepoint_prior_scale"],
+        seasonality_prior_scale=params["seasonality_prior_scale"],
+    )
+
+    # Add regressors
+    m.add_regressor("temp", standardize=True)
+    m.add_regressor("pressure", standardize=True)
+    m.add_regressor("humidity", standardize=True)
+    m.add_regressor("wind_speed", standardize=True)
+
+    m.fit(train_data)
+
+    df_cv = cross_validation(m, initial='200 days', period='180 days', horizon='100 days')
+    df_p = performance_metrics(df_cv, rolling_window=1)
+    print(df_p)
+    rmse = df_p['rmse'].mean()
+
+    return rmse
+
+space = {
+    "daily_seasonality": hp.choice("daily_seasonality", [True, False]),
+    "weekly_seasonality": hp.choice("weekly_seasonality", [True, False]),
+    "yearly_seasonality": hp.choice("yearly_seasonality", [True, False]),
+    "seasonality_mode": hp.choice("seasonality_mode", ["additive", "multiplicative"]),
+    "changepoint_prior_scale": hp.loguniform("changepoint_prior_scale", -5, 0),
+    "seasonality_prior_scale": hp.loguniform("seasonality_prior_scale", -5, 0),
+}
+
+best_params = fmin(
+    fn=train_and_evaluate,
+    space=space,
+    algo=tpe.suggest,
+    max_evals=10,
+    rstate=np.random.default_rng(42),
+    verbose=2,
+)
+
+best_params["daily_seasonality"] = bool(best_params["daily_seasonality"])
+best_params["weekly_seasonality"] = bool(best_params["weekly_seasonality"])
+best_params["yearly_seasonality"] = bool(best_params["yearly_seasonality"])
+best_params["seasonality_mode"] = ["additive", "multiplicative"][best_params["seasonality_mode"]]
+
+
+
+
+# COMMAND ----------
+
+# Add regressors
+
+final_model = Prophet(**best_params)
+final_model.add_regressor("temp", standardize=True)
+# final_model.add_regressor("feels_like", standardize=True)
+final_model.add_regressor("pressure", standardize=True)
+final_model.add_regressor("humidity", standardize=True)
+final_model.add_regressor("wind_speed", standardize=True)
+# final_model.add_regressor("rain_1h", standardize=True)
+
+final_model.fit(train_data)
+future = pd.DataFrame({
+    'ds': test_data['ds'],
+    'temp': test_data['temp'],
+    # 'feels_like': test_data['feels_like'],
+    'pressure': test_data['pressure'],
+    'humidity': test_data['humidity'],
+    'wind_speed': test_data['wind_speed']
+    # 'rain_1h': test_data['rain_1h']
+})
+
+
+forecast = final_model.predict(future)
+
+
+mape = mean_absolute_percentage_error(test_data['y'], forecast['yhat'])
+mse = mean_squared_error(test_data['y'], forecast['yhat'])
+
+
+
+print("MSE: {:.2f}".format(mse))
+
+print(forecast['yhat'])
+
+#Plot the data
+import matplotlib.pyplot as plt
+indices = [i for i in range(0,250)]
+plt.plot(indices, test_data['y'][:250], 'g-', label='Distance thumb_finger')
+plt.plot(indices, forecast['yhat'][:250], 'b-', label='Cam Distance')
+#plt.plot(indices, robust_dist, 'c-', label='Distance thumb_finger')
+
+
+# Add axis labels and title
+plt.xlabel('Predicted')
+plt.ylabel('Velocity in pixel/sec')
+plt.title('Robust Lengths between thumb and index finger (4, 2, 0)')
+plt.legend()
+# Display the plot
+plt.show()
+
+# COMMAND ----------
+
+test_data
+
+# COMMAND ----------
+
+
+!pip install --upgrade fbprophet
 
 # COMMAND ----------
 
@@ -312,7 +454,12 @@ from pyspark.sql.functions import corr
 
 # Define the input features and the target column
 input_cols = ['hour', 'temp', 'feels_like', 'pressure', 'humidity', 'dew_point', 'uvi', 'clouds', 'visibility', 'wind_speed', 'wind_deg', 'pop', 'snow_1h', 'rain_1h']
-target_col = 'count'
+target_col = 'net_'
+import pyspark.sql.functions as F
+
+# Convert string hour column to integer
+joined_df = joined_df.withColumn("hour", F.regexp_replace("hour", "[^0-9]", "").cast("integer"))
+
 
 # Assemble the input features into a single vector column
 assembler = VectorAssembler(inputCols=input_cols, outputCol='features')
@@ -395,22 +542,19 @@ from pyspark.ml import Pipeline
 from pyspark.ml.feature import VectorAssembler
 
 # Define the input features and the target column
-# input_cols = ['hour', 'temp', 'feels_like', 'pressure', 'humidity', 'dew_point', 'uvi', 'clouds', 'visibility', 'wind_speed', 'wind_deg', 'pop', 'snow_1h', 'rain_1h']
-# target_col = 'count'
-input_cols = ['hour', 'temp', 'feels_like', 'pressure', 'humidity', 'dew_point', 'uvi', 'clouds', 'visibility', 'wind_speed', 'wind_deg', 'pop', 'snow_1h', 'rain_1h']
-target_col = 'count'
+input_cols = ['hour', 'temp', 'feels_like', 'pressure', 'humidity', 'dew_point', 'uvi', 'clouds', 'visibility', 'pop', 'snow_1h', 'rain_1h']
+target_col = 'net_change'
 
 # Assemble the input features into a single vector column
 assembler = VectorAssembler(inputCols=input_cols, outputCol='features')
 
 # Split the data into training and test sets
-train_data, test_data = joined_df.randomSplit([0.7, 0.3], seed=42)
+train_data, test_data = joined_df.randomSplit([0.8, 0.1], seed=42)
 
-# Chain the feature transformers and model together in a pipeline
-
-# Define the Random Forest Regressor model
+# Define the Random Forest regression model
 rf = RandomForestRegressor(featuresCol='features', labelCol=target_col)
 
+# Chain the feature transformers and model together in a pipeline
 pipeline = Pipeline(stages=[assembler, rf])
 
 # Fit the pipeline on the training data
@@ -420,13 +564,15 @@ model = pipeline.fit(train_data)
 predictions = model.transform(test_data)
 
 # Evaluate the model using RMSE
-evaluator = RegressionEvaluator(labelCol=target_col, predictionCol='prediction', metricName='rmse')
+evaluator = RegressionEvaluator(predictionCol='prediction', labelCol='net_change', metricName='rmse')
 rmse = evaluator.evaluate(predictions)
 print('Root Mean Squared Error (RMSE) on test data = {:.2f}'.format(rmse))
 
 # Get the R-squared value of the model on the test data
-r2 = evaluator.evaluate(predictions, {evaluator.metricName: "r2"})
+r2 = evaluator.evaluate(predictions, {evaluator.metricName: 'r2'})
 print('R-squared on test data = {:.2f}'.format(r2))
+
+
 
 
 # COMMAND ----------
@@ -470,20 +616,22 @@ print('R-squared on test data = {:.2f}'.format(r2))
 
 # COMMAND ----------
 
+# DBTITLE 1,GBT REGRESSOR
 from pyspark.ml.regression import GBTRegressor
 from pyspark.ml.evaluation import RegressionEvaluator
 from pyspark.ml import Pipeline
 from pyspark.ml.feature import VectorAssembler
 
 # Define the input features and the target column
-input_cols = ['hour', 'temp', 'feels_like', 'pressure', 'humidity', 'dew_point', 'uvi', 'clouds', 'visibility', 'pop', 'snow_1h', 'rain_1h']
-target_col = 'count'
+# input_cols = ['hour', 'temp', 'feels_like', 'pressure', 'humidity', 'dew_point', 'uvi', 'clouds', 'visibility', 'pop', 'snow_1h', 'rain_1h']
+input_cols = ['hour', 'temp', 'pressure', 'humidity', 'dew_point', ]
+target_col = 'net_change'
 
 # Assemble the input features into a single vector column
 assembler = VectorAssembler(inputCols=input_cols, outputCol='features')
 
 # Split the data into training and test sets
-train_data, test_data = joined_df.randomSplit([0.7, 0.3], seed=42)
+train_data, test_data = joined_df.randomSplit([0.9, 0.1], seed=42)
 
 # Define the Gradient-Boosted Tree regression model
 gbt = GBTRegressor(featuresCol='features', labelCol=target_col)
@@ -498,7 +646,7 @@ model = pipeline.fit(train_data)
 predictions = model.transform(test_data)
 
 # Evaluate the model using RMSE
-evaluator = RegressionEvaluator(predictionCol='prediction', labelCol='count', metricName='rmse')
+evaluator = RegressionEvaluator(predictionCol='prediction', labelCol='net_change', metricName='rmse')
 rmse = evaluator.evaluate(predictions)
 print('Root Mean Squared Error (RMSE) on test data = {:.2f}'.format(rmse))
 
@@ -508,9 +656,74 @@ print('R-squared on test data = {:.2f}'.format(r2))
 
 
 
+
+
 # COMMAND ----------
 
-display(predictions)
+import matplotlib.pyplot as plt
+
+# Extract the first 500 data points from the predictions dataframe
+
+net_change = predictions.select('net_change').collect()
+predicted = predictions.select('prediction').collect()
+indices = [i for i in range(len(predicted))]
+# Plot the data
+plt.plot(indices, net_change, 'g-', label='Net Change')
+plt.plot(indices, predicted, 'b-', label='Predictions')
+
+# Add axis labels and title
+plt.xlabel('Index')
+plt.ylabel('Net Change')
+plt.title('Predictions vs Net Change (First 500 Data Points)')
+
+# Add legend
+plt.legend()
+
+# Display the plot
+plt.show()
+
+
+# COMMAND ----------
+
+from pyspark.ml.tuning import ParamGridBuilder, CrossValidator
+
+# Define the input features and the target column
+input_cols = ['hour', 'temp', 'pressure', 'humidity', 'dew_point']
+target_col = 'net_change'
+
+# Assemble the input features into a single vector column
+assembler = VectorAssembler(inputCols=input_cols, outputCol='features')
+
+# Define the Gradient-Boosted Tree regression model
+gbt = GBTRegressor(featuresCol='features', labelCol=target_col)
+
+# Chain the feature transformers and model together in a pipeline
+pipeline = Pipeline(stages=[assembler, gbt])
+
+# Define the hyperparameter grid to search over
+param_grid = (ParamGridBuilder()
+              .addGrid(gbt.maxDepth, [2, 4, 6])
+              .addGrid(gbt.maxBins, [10, 20, 30])
+              .addGrid(gbt.maxIter, [10, 20, 30])
+              .build())
+
+# Define the cross-validation object
+cv = CrossValidator(estimator=pipeline, evaluator=evaluator, estimatorParamMaps=param_grid, numFolds=3)
+
+# Fit the pipeline on the training data
+cv_model = cv.fit(train_data)
+
+# Make predictions on the test data
+predictions = cv_model.transform(test_data)
+
+# Evaluate the model using RMSE
+rmse = evaluator.evaluate(predictions)
+print('Root Mean Squared Error (RMSE) on test data = {:.2f}'.format(rmse))
+
+# Get the R-squared value of the model on the test data
+r2 = evaluator.evaluate(predictions, {evaluator.metricName: 'r2'})
+print('R-squared on test data = {:.2f}'.format(r2))
+
 
 # COMMAND ----------
 
@@ -567,7 +780,8 @@ from pyspark.ml.tuning import CrossValidator, ParamGridBuilder
 from pyspark.ml.feature import VectorAssembler
 
 # Define the input features and the target column
-input_cols = ['hour', 'temp', 'feels_like', 'pressure', 'humidity', 'dew_point', 'uvi', 'clouds', 'visibility', 'wind_speed', 'wind_deg', 'pop', 'snow_1h', 'rain_1h']
+# input_cols = ['hour', 'temp', 'feels_like', 'pressure', 'humidity', 'dew_point', 'uvi', 'clouds', 'visibility', 'wind_speed', 'wind_deg', 'pop', 'snow_1h', 'rain_1h']
+input_cols = ['hour', 'temp', 'feels_like', 'pressure', 'humidity','wind_speed','rain_1h']
 target_col = 'count'
 
 # Assemble the input features into a single vector column

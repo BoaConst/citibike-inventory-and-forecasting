@@ -1,0 +1,376 @@
+# Databricks notebook source
+# MAGIC %run ./includes/includes
+
+# COMMAND ----------
+
+import mlflow
+import json
+import pandas as pd
+import numpy as np
+from prophet import Prophet, serialize
+from prophet.diagnostics import cross_validation, performance_metrics
+from mlflow.tracking.client import MlflowClient
+import seaborn as sns
+import matplotlib.pyplot as plt
+sns.set(color_codes=True)
+import itertools
+
+
+# COMMAND ----------
+
+SOURCE_DATA = GROUP_DATA_PATH + "DataforModelling/"
+ARTIFACT_PATH = GROUP_MODEL_NAME
+np.random.seed(12345)
+
+data = (spark.read
+    .format("delta")
+    .load(SOURCE_DATA))
+
+
+# COMMAND ----------
+
+
+## Helper routine to extract the parameters that were used to train a specific instance of the model
+def extract_params(pr_model):
+    return {attr: getattr(pr_model, attr) for attr in serialize.SIMPLE_ATTRIBUTES}
+
+
+
+# COMMAND ----------
+
+data.printSchema()
+
+# COMMAND ----------
+
+from pyspark.sql.functions import col
+
+new_df = data.select(col("date_hour").alias('ds'), col("feels_like"), col("clouds"), col("wind_speed"), col("is_weekend"),col("net_change").alias('y'))
+
+display(new_df)
+
+
+# COMMAND ----------
+
+df = new_df.toPandas()
+train_data = df.sample(frac=0.8, random_state=42)
+test_data = df.drop(train_data.index)
+x_train, y_train, x_test, y_test = train_data["ds"], train_data["y"], test_data["ds"], test_data["y"]
+
+
+# COMMAND ----------
+
+import plotly.express as px
+fig = px.line(df, x="ds", y="y", title='Net bike change')
+fig.show()
+
+# COMMAND ----------
+
+from sklearn.metrics import mean_absolute_percentage_error, mean_squared_error,mean_absolute_error
+
+# Set up parameter grid
+param_grid = {  
+    'changepoint_prior_scale': [0.01, 0.005],
+    'seasonality_prior_scale': [4, 8],
+    'seasonality_mode': ['additive'],
+    'yearly_seasonality' : [True],
+    'weekly_seasonality': [True],
+    'daily_seasonality': [True]
+}
+
+# Generate all combinations of parameters
+all_params = [dict(zip(param_grid.keys(), v)) for v in itertools.product(*param_grid.values())]
+
+print(f"Total training runs {len(all_params)}")
+
+# Create a list to store MAPE values for each combination
+maes = [] 
+
+# Use cross validation to evaluate all parameters
+for params in all_params:
+    with mlflow.start_run(): 
+        # Fit a model using one parameter combination + holidays
+        m = Prophet(**params) 
+        holidays = pd.DataFrame({"ds": [], "holiday": []})
+        m.add_country_holidays(country_name='US')
+        m.add_regressor('feels_like')
+        m.add_regressor('wind_speed')
+        m.add_regressor('clouds')
+        m.add_regressor('is_weekend')
+        m.fit(train_data)
+
+        # Cross-validation
+        # df_cv = cross_validation(model=m, initial='710 days', period='180 days', horizon = '365 days', parallel="threads")
+        # Model performance
+        # df_p = performance_metrics(m, rolling_window=1)
+
+        # try:
+        #     metric_keys = ["mse", "rmse", "mae", "mape", "mdape", "smape", "coverage"]
+        #     metrics = {k: df_p[k].mean() for k in metric_keys}
+        #     params = extract_params(m)
+        # except:
+        #     pass
+
+        # print(f"Logged Metrics: \n{json.dumps(metrics, indent=2)}")
+        # print(f"Logged Params: \n{json.dumps(params, indent=2)}")
+
+        y_pred = m.predict(test_data.dropna())
+
+        mae = mean_absolute_error(y_test.dropna(), y_pred['yhat'])
+        mlflow.prophet.log_model(m, artifact_path=ARTIFACT_PATH)
+        mlflow.log_params(params)
+        mlflow.log_metrics({'mae': mae})
+        model_uri = mlflow.get_artifact_uri(ARTIFACT_PATH)
+        print(f"Model artifact logged to: {model_uri}")
+
+        # Save model performance metrics for this combination of hyper parameters
+        maes.append((mae, model_uri))
+
+
+# COMMAND ----------
+
+# Tuning results
+
+tuning_results = pd.DataFrame(all_params)
+tuning_results['mae'] = list(zip(*maes))[0]
+tuning_results['model']= list(zip(*maes))[1]
+
+best_params = dict(tuning_results.iloc[tuning_results[['mae']].idxmin().values[0]])
+
+best_params
+
+# COMMAND ----------
+
+loaded_model = mlflow.prophet.load_model(best_params['model'])
+
+forecast = loaded_model.predict(test_data)
+
+print(f"forecast:\n${forecast.tail(40)}")
+
+# COMMAND ----------
+
+prophet_plot = loaded_model.plot(forecast)
+
+# COMMAND ----------
+
+prophet_plot2 = loaded_model.plot_components(forecast)
+
+# COMMAND ----------
+
+# Finding residuals
+test_data.ds = pd.to_datetime(test_data.ds)
+forecast.ds = pd.to_datetime(forecast.ds)
+results = forecast[['ds','yhat']].merge(test_data,on="ds")
+results['residual'] = results['yhat'] - results['y']
+
+# COMMAND ----------
+
+# Plot the residuals
+
+fig = px.scatter(
+    results, x='yhat', y='residual',
+    marginal_y='violin',
+    trendline='ols'
+)
+fig.show()
+
+# COMMAND ----------
+
+# Register Model to MLFlow
+
+model_details = mlflow.register_model(model_uri=best_params['model'], name=ARTIFACT_PATH)
+
+
+# COMMAND ----------
+
+# Call MLFlow Client
+
+client = MlflowClient()
+
+# COMMAND ----------
+
+
+
+# COMMAND ----------
+
+#train test split
+train_data = df.sample(frac=0.8, random_state=42)
+test_data = df.drop(train_data.index)
+x_train, y_train, x_test, y_test = train_data["ds"], train_data["y"], test_data["ds"], test_data["y"]
+
+# COMMAND ----------
+
+import plotly.express as px
+fig = px.line(df, x="ds", y="y", title='Net bike change')
+fig.show()
+
+# COMMAND ----------
+
+from sklearn.metrics import mean_absolute_error
+# Set up parameter grid
+param_grid = {  
+    'changepoint_prior_scale': [0.01, 0.005],
+    'seasonality_prior_scale': [4, 8],
+    'seasonality_mode': ['additive'],
+    'yearly_seasonality' : [True],
+    'weekly_seasonality': [True],
+    'daily_seasonality': [True]
+}
+
+# Generate all combinations of parameters
+all_params = [dict(zip(param_grid.keys(), v)) for v in itertools.product(*param_grid.values())]
+
+print(f"Total training runs {len(all_params)}")
+
+# Create a list to store MAPE values for each combination
+maes = []
+
+# Use cross validation to evaluate all parameters
+for params in all_params:
+    with mlflow.start_run(): 
+        # Fit a model using one parameter combination + holidays
+        m = Prophet(**params) 
+        holidays = pd.DataFrame({"ds": [], "holiday": []})
+        m.add_country_holidays(country_name='US')
+        m.add_regressor('feels_like')
+        m.add_regressor('rain')
+        m.add_regressor('windspeed')
+        m.add_regressor('temp')
+        m.fit(train_data)
+
+        # Cross-validation
+        # df_cv = cross_validation(model=m, initial='710 days', period='180 days', horizon = '365 days', parallel="threads")
+        # Model performance
+        # df_p = performance_metrics(m, rolling_window=1)
+
+        y_pred = m.predict(test_data.dropna())
+
+        #df_p = performance_metrics(y_pred, rolling_window=1)
+        
+        #metric_keys = ["mse", "rmse", "mae", "mape", "mdape", "smape", "coverage"]
+        #metrics = {k: y_pred[k].mean() for k in metric_keys}
+        #params = extract_params(m)
+       
+
+        #print(f"Logged Metrics: \n{json.dumps(metrics, indent=2)}")
+        #print(f"Logged Params: \n{json.dumps(params, indent=2)}")
+
+        #mlflow.prophet.log_model(m, artifact_path=ARTIFCAT_PATH)
+        #mlflow.log_params(params)
+        #mlflow.log_metrics(metrics)
+        #model_uri = mlflow.get_artifact_uri(ARTIFACT_PATH)
+
+        #mapes.append((y_pred['mape'].values[0],model_uri))
+
+       
+
+        mae = mean_absolute_error(y_test.dropna(), y_pred['yhat'])
+        mlflow.prophet.log_model(m, artifact_path=ARTIFACT_PATH)
+        mlflow.log_params(params)
+        mlflow.log_metrics({'mae': mae})
+        model_uri = mlflow.get_artifact_uri(ARTIFACT_PATH)
+        print(f"Model artifact logged to: {model_uri}")
+
+        # Save model performance metrics for this combination of hyper parameters
+        maes.append((mae, model_uri))
+
+# COMMAND ----------
+
+# Tuning results
+
+tuning_results = pd.DataFrame(all_params)
+tuning_results['mae'] = list(zip(*maes))[0]
+tuning_results['model']= list(zip(*maes))[1]
+
+best_params = dict(tuning_results.iloc[tuning_results[['mae']].idxmin().values[0]])
+
+best_params
+
+# COMMAND ----------
+
+loaded_model = mlflow.prophet.load_model(best_params['model'])
+
+forecast = loaded_model.predict(test_data)
+
+print(f"forecast:\n${forecast.tail(40)}")
+
+# COMMAND ----------
+
+prophet_plot = loaded_model.plot(forecast)
+
+# COMMAND ----------
+
+prophet_plot2 = loaded_model.plot_components(forecast)
+
+# COMMAND ----------
+
+# Finding residuals
+test_data.ds = pd.to_datetime(test_data.ds)
+forecast.ds = pd.to_datetime(forecast.ds)
+results = forecast[['ds','yhat']].merge(test_data,on="ds")
+results['residual'] = results['yhat'] - results['y']
+
+
+# COMMAND ----------
+
+# Plot the residuals
+
+fig = px.scatter(
+    results, x='yhat', y='residual',
+    marginal_y='violin',
+    trendline='ols'
+)
+fig.show()
+
+# COMMAND ----------
+
+# Register Model to MLFlow
+
+model_details = mlflow.register_model(model_uri=best_params['model'], name=GROUP_MODEL_NAME)
+
+
+# COMMAND ----------
+
+client = MlflowClient()
+
+# COMMAND ----------
+
+if promote_model:
+    client.transition_model_version_stage(
+    name=model_details.name,
+    version=model_details.version,
+    stage='Production')
+else:
+    client.transition_model_version_stage(
+    name=model_details.name,
+    version=model_details.version,
+    stage='Staging'
+)
+
+# COMMAND ----------
+
+model_version_details = client.get_model_version(
+    name=model_details.name,
+    version=model_details.version
+)
+print("The current model stage is: '{stage}'".format(stage=model_version_details.current_stage))
+
+# COMMAND ----------
+
+latest_version_info = client.get_latest_versions(ARTIFACT_PATH, stages=["Staging"])
+
+latest_staging_version = latest_version_info[0].version
+
+print("The latest staging version of the model '%s' is '%s'." % (ARTIFACT_PATH, latest_staging_version))
+
+# COMMAND ----------
+
+model_staging_uri = "models:/{model_name}/staging".format(model_name=ARTIFACT_PATH)
+
+print("Loading registered model version from URI: '{model_uri}'".format(model_uri=model_staging_uri))
+
+model_staging = mlflow.prophet.load_model(model_staging_uri)
+
+# COMMAND ----------
+
+model_staging.plot(model_staging.predict(test_data))
+
