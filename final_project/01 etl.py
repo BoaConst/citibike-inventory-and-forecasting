@@ -4,12 +4,12 @@
 # COMMAND ----------
 
 # DBTITLE 1,Parsing the parameters provided by the main notebook
-# start_date = str(dbutils.widgets.get('01.start_date'))
-# end_date = str(dbutils.widgets.get('02.end_date'))
-# hours_to_forecast = int(dbutils.widgets.get('03.hours_to_forecast'))
-# promote_model = bool(True if str(dbutils.widgets.get('04.promote_model')).lower() == 'yes' else False)
+start_date = str(dbutils.widgets.get('01.start_date'))
+end_date = str(dbutils.widgets.get('02.end_date'))
+hours_to_forecast = int(dbutils.widgets.get('03.hours_to_forecast'))
+promote_model = bool(True if str(dbutils.widgets.get('04.promote_model')).lower() == 'yes' else False)
 
-# print(start_date,end_date,hours_to_forecast, promote_model)
+print(start_date,end_date,hours_to_forecast, promote_model)
 
 # COMMAND ----------
 
@@ -27,6 +27,7 @@ print("At a high-level, "
 # DBTITLE 1,Helper functions required as part of ETL
 from pyspark.sql import DataFrame
 from pyspark.sql.types import StructType
+from pyspark.sql.functions import to_timestamp, to_date, from_unixtime, date_format, hour, month
 
 def readDataFromSourceWithInferredSchema(path: str, file_format: str, df: DataFrame) -> DataFrame:
     schema = df.schema
@@ -56,6 +57,8 @@ def readDataFrameFromSource(path: str, file_format: str) -> DataFrame:
                 .load(path)
 
     return readDataFromSourceWithInferredSchema(path, file_format, df)
+
+
 
 def writeDataFrameToDeltaTable(df: DataFrame, delta_table_name: str):
     delta_table_path = GROUP_DATA_PATH + delta_table_name
@@ -178,8 +181,6 @@ def extractDateHourFromDataFrame1(df: DataFrame, dateColName: str) -> DataFrame:
 # COMMAND ----------
 
 # DBTITLE 1,Bronze Tables for Historical Weather and Bike Trip Data
-from pyspark.sql.functions import to_timestamp, to_date, from_unixtime, date_format, hour, month
-
 # Read Historical Weather Data
 weather_df = readDataFrameFromSource(NYC_WEATHER_FILE_PATH, "csv")
 
@@ -211,14 +212,6 @@ print("Historic Bike Trip data files read-in was successful! "
 # Write raw bike trips data to Bronze table
 nyc_historical_bike_delta_table_name = 'Bronze_nyc_historical_bike_trip_data'
 writeDataFrameToDeltaTable(bike_df, nyc_historical_bike_delta_table_name) 
-
-# COMMAND ----------
-
-# DBTITLE 1,Bronze Tables for Live Delta Tables updated every 30 mins
-# Load the Delta table into a DataFrame
-bronze_station_info_df = readDeltaTable(BRONZE_STATION_INFO_PATH, False)
-bronze_station_status_df = readDeltaTable(BRONZE_STATION_STATUS_PATH, False)
-bronze_nyc_weather_df = readDeltaTable(BRONZE_NYC_WEATHER_PATH, False)
 
 # COMMAND ----------
 
@@ -289,28 +282,6 @@ display(historic_bike_trips_for_ending_station_df)
 
 nyc_historical_ending_bike_delta_table_name = 'Silver_nyc_historical_G02_ending_bike_trip_data'
 writeDataFrameToDeltaTableOptimized(historic_bike_trips_for_ending_station_df, nyc_historical_ending_bike_delta_table_name, "month", "date, hour")
-
-# COMMAND ----------
-
-# MAGIC %sql
-# MAGIC show tables from g02_db
-
-# COMMAND ----------
-
-# DBTITLE 1,Transformations and filtering of Live Station info and status Data
-from pyspark.sql.functions import col
-
-# Filter the live tables for the assigned station
-bronze_station_info_df = bronze_station_info_df.filter(col("short_name") == '5329.03')
-bronze_station_status_df = bronze_station_status_df.filter(col("station_id") == '66dc0e99-0aca-11e7-82f6-3863bb44ef7c')
-bronze_station_status_df = extractDateHourFromDataFrame(bronze_station_status_df, "last_reported", False)
-
-# Write raw data files to Silver Tables
-station_info_delta_table_name = 'Silver_G02_station_info_data'
-writeDataFrameToDeltaTable(bronze_station_info_df, station_info_delta_table_name)
-
-station_status_delta_table_name = 'Silver_G02_station_status_data'
-writeDataFrameToDeltaTableOptimized(bronze_station_status_df, station_status_delta_table_name, "month", "date, hour")
 
 # COMMAND ----------
 
@@ -441,6 +412,13 @@ Data_modelling_df = Data_modelling_df.withColumn('date_hour', concat('date', lit
 Data_modelling_df = Data_modelling_df.withColumn('timestamp', to_timestamp('date_hour', 'yyyy-MM-dd HH:mm'))
 Data_modelling_df = Data_modelling_df.drop("date_hour")
 
+# From our model we got to know that snow_1h, main, description, start_ride_count and end_ride_count are not really relevant from a modelling perspective. These fields don't appear in the gold table for live data. Thus we drop it!
+columns_to_drop = ["snow_1h", "main", "description", "start_ride_count", "end_ride_count"]
+
+# Transforming Weather Live Data
+Data_modelling_df = Data_modelling_df \
+                            .drop(*columns_to_drop) \
+
 display(Data_modelling_df)
 
 Data_modelling_df.printSchema()
@@ -451,13 +429,119 @@ display(Data_modelling_df.orderBy("date","hour"))
 
 # COMMAND ----------
 
+# Write final dataset for modelling to Delta table
+data_for_modelling_table_name = 'Silver_G02_modelling_data'
+writeDataFrameToDeltaTable(Data_modelling_df, data_for_modelling_table_name)
+
+# COMMAND ----------
+
+# DBTITLE 1,Bronze Tables for Live Delta Tables updated every 30 mins
+# Load the Delta table into a DataFrame
+bronze_station_info_df = readDeltaTable(BRONZE_STATION_INFO_PATH, False)
+bronze_station_status_df = readDeltaTable(BRONZE_STATION_STATUS_PATH, False)
+bronze_nyc_weather_df = readDeltaTable(BRONZE_NYC_WEATHER_PATH, False)
+
+# COMMAND ----------
+
+# DBTITLE 1,Transformations and filtering of Live Station info and status Data
+from pyspark.sql.functions import col, lead, asc
+from pyspark.sql.window import Window
+
+# Filter the live tables for the assigned station
+bronze_station_info_df = bronze_station_info_df.filter(col("short_name") == '5329.03')
+bronze_station_status_df = bronze_station_status_df.filter(col("station_id") == '66dc0e99-0aca-11e7-82f6-3863bb44ef7c')
+bronze_station_status_df = extractDateHourFromDataFrame(bronze_station_status_df, "last_reported", False)
+bronze_nyc_weather_df = extractDateHourFromDataFrame(bronze_nyc_weather_df, "time", False)
+
+# COMMAND ----------
+
+from pyspark.sql.functions import col, lead, asc
+
+# Transforming station status table
+# Sort the DataFrame by the date column in descending order
+bronze_station_status_df = bronze_station_status_df.orderBy(asc('last_reported'))
+
+# Use drop_duplicates to keep only the first occurrence of each unique hour
+bronze_station_status_df = bronze_station_status_df.dropDuplicates(['date', 'hour'])
+
+bronze_station_status_df = bronze_station_status_df.withColumn("net_change", lead(col("num_bikes_available")).over(Window.orderBy("date")) - col("num_bikes_available"))
+bronze_station_status_df = bronze_station_status_df.fillna(0, subset=["net_change"])
+
+bronze_station_status_df = bronze_station_status_df.select("date", "hour", "net_change")
+
+columns_to_drop = ["dt", "weather"]
+
+# Transforming Weather Live Data
+bronze_nyc_weather_df = bronze_nyc_weather_df \
+                            .drop(*columns_to_drop) \
+                                .withColumnRenamed("rain.1h", "rain_1h") \
+                                    .dropDuplicates(["date", "hour"]) \
+                                        .orderBy("date", "hour")
+
+# COMMAND ----------
+
+from pyspark.sql.functions import col, avg, mode
+from pyspark.sql.functions import date_format, dayofweek,when
+
+# Select columns with integer and string data types
+int_cols = ["temp","feels_like","pressure","humidity","dew_point","uvi","clouds","visibility","wind_speed","wind_deg","pop","rain_1h"]
+
+# Group by date and hour and compute average and mode for integer and string columns respectively
+grouped_bronze_nyc_weather_df = bronze_nyc_weather_df.groupBy("date", "hour").agg(*[avg(col).alias(col) for col in int_cols])
+
+# Show the resulting dataframe
+grouped_bronze_nyc_weather_df = grouped_bronze_nyc_weather_df.withColumn("day_of_week", dayofweek("date")) \
+                                       .withColumn("is_weekend", when(dayofweek("date").isin([7,1]), 1).otherwise(0))
+
+# COMMAND ----------
+
+from pyspark.sql.functions import concat, lit, to_timestamp,col,lpad
+
+# Joining with grouped weather data for final dataframe for modelling
+Data_modelling_live_df = grouped_bronze_nyc_weather_df.join(bronze_station_status_df, ["date", "hour"], "left_outer")
+
+# Making the hour column consistent length
+Data_modelling_live_df = Data_modelling_live_df.withColumn(
+    "hour", lpad(col("hour").cast("string"), 2, "0")
+)
+
+Data_modelling_live_df = Data_modelling_live_df.withColumn('date_hour', concat('date', lit(' '), 'hour', lit(':00')))
+Data_modelling_live_df = Data_modelling_live_df.withColumn('timestamp', to_timestamp('date_hour', 'yyyy-MM-dd HH:mm'))
+Data_modelling_live_df = Data_modelling_live_df.drop("date_hour")
+
+Data_modelling_live_df.printSchema()
+display(Data_modelling_live_df)
+
+# COMMAND ----------
+
+# Write the refined dataframe to a gold table
+live_data_for_modelling_table_name = 'Gold_G02_modelling_data'
+writeDataFrameToDeltaTableOptimized(Data_modelling_live_df, live_data_for_modelling_table_name, "date", "date, hour")
+
+# COMMAND ----------
+
+# DBTITLE 1,Gold Table for Storing Model Results
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType, DoubleType
+
+model_result_schema = StructType([
+  StructField("model_name", StringType(), True),
+  StructField("version", IntegerType(), True),
+  StructField("rmse", DoubleType(), True)
+])
+
+model_result_df = spark.createDataFrame([], model_result_schema)
+
+gold_model_result_data_delta_table_name = 'Gold_model_result_data'
+writeDataFrameToDeltaTable(model_result_df, gold_model_result_data_delta_table_name) 
+
+# COMMAND ----------
+
 display(dbutils.fs.ls(GROUP_DATA_PATH))
 
 # COMMAND ----------
 
-# Write final dataset for modelling to Delta table
-data_for_modelling_table_name = 'Silver_G02_modelling_data'
-writeDataFrameToDeltaTable(Data_modelling_df, data_for_modelling_table_name)
+# MAGIC %sql
+# MAGIC show tables from g02_db
 
 # COMMAND ----------
 
