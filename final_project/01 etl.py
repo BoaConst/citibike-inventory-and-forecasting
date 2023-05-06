@@ -26,6 +26,7 @@ print("At a high-level, "
 
 # DBTITLE 1,Helper functions required as part of ETL
 from pyspark.sql import DataFrame
+from pyspark.sql.types import StructType
 
 def readDataFromSourceWithInferredSchema(path: str, file_format: str, df: DataFrame) -> DataFrame:
     schema = df.schema
@@ -37,6 +38,7 @@ def readDataFromSourceWithInferredSchema(path: str, file_format: str, df: DataFr
                 .schema(schema) \
                     .load()
     
+    display(df)
     return df
 
 def readDataFrameFromSource(path: str, file_format: str) -> DataFrame:
@@ -56,20 +58,14 @@ def readDataFrameFromSource(path: str, file_format: str) -> DataFrame:
     return readDataFromSourceWithInferredSchema(path, file_format, df)
 
 def writeDataFrameToDeltaTable(df: DataFrame, delta_table_name: str):
-    """
-    Writes a Spark DataFrame into a delta table
-
-    :param df: Spark DataFrame
-    :param delta_table_name: The name of the delta table
-    """
     delta_table_path = GROUP_DATA_PATH + delta_table_name
-    # Write the dataframe to delta table
     df.write.format("delta") \
-        .mode("append") \
-            .option("path", delta_table_path) \
-                .option("checkpointLocation", GROUP_DATA_PATH + "_checkpoints/") \
+        .mode("overwrite") \
+            .option("overwriteSchema", "true") \
+                .option("path", delta_table_path) \
                     .saveAsTable(delta_table_name)
-    # Check if the directory is correctly created or not
+
+    # Check if the Delta Tables were correctly created or not
     try:
         if len(dbutils.fs.ls(delta_table_path)) >= 1: 
             print("Directory created : ", delta_table_path)    
@@ -77,13 +73,66 @@ def writeDataFrameToDeltaTable(df: DataFrame, delta_table_name: str):
     except FileNotFoundError as e:
         print("Oops! Directory not found:", e)
 
+def writeDataFrameToDeltaTableOptimized(df: DataFrame, delta_table_name: str, partitionByColumnName: str, zOrderColumnNames: str):
+    """
+    Writes a Spark DataFrame into a delta table
 
-def readDeltaTable(delta_table_path: str) -> DataFrame:
-    df = spark.read.format("delta") \
+    :param df: Spark DataFrame
+    :param delta_table_name: The name of the delta table
+    """
+    temp_table_name = "temp_table"
+    temp_table_path = GROUP_DATA_PATH + temp_table_name
+    
+    # Write the dataframe to temp table so that the schema can be inferred while Zordering and Partitioning
+    df.write.format("delta") \
+        .mode("overwrite") \
+            .option("overwriteSchema", "true") \
+                .option("path", temp_table_path) \
+                    .saveAsTable(temp_table_name)
+
+    # Populate the Delta Table from the delta table path
+    delta_table_path = GROUP_DATA_PATH + delta_table_name
+    checkpoints_dir = GROUP_DATA_PATH + "_checkpoints/"
+
+    spark.sql(f"""
+        CREATE TABLE {delta_table_name}
+        USING delta
+        LOCATION '{delta_table_path}'
+        PARTITIONED BY ({partitionByColumnName})
+        OPTIONS ('checkpointLocation' = '{checkpoints_dir}')
+        AS SELECT * FROM {temp_table_name}
+    """)
+
+    spark.sql(f"""
+        OPTIMIZE {delta_table_name}
+        ZORDER BY {zOrderColumnNames}
+    """)
+
+
+    # Delete the temp table
+    spark.sql(f"DROP TABLE {temp_table_name}")
+
+    # Check if the Delta Tables were correctly created or not
+    try:
+        if len(dbutils.fs.ls(delta_table_path)) >= 1: 
+            print("Directory created : ", delta_table_path)    
+            display(dbutils.fs.ls(delta_table_path))  
+    except FileNotFoundError as e:
+        print("Oops! Directory not found:", e)
+
+def readDeltaTable(delta_table_path: str, isReadStream: bool) -> DataFrame:
+    df = spark.createDataFrame([], StructType([]))
+    if isReadStream:
+        df = spark.readStream.format("delta") \
             .load(delta_table_path)
+    else:
+        df = spark.read.format("delta") \
+            .load(delta_table_path)
+
+    display(df)
     return df
 
-def registerDeltaTablesAsGlobalTemporaryView(delta_table_path: str, temporary_view_name: str):
+def registerDeltaTablesAsTemporaryView(delta_table_path: str, temporary_view_name: str):
     """
     Loads a Delta Table as a temporary view 
 
@@ -92,66 +141,81 @@ def registerDeltaTablesAsGlobalTemporaryView(delta_table_path: str, temporary_vi
     """
     spark.read.format("delta") \
         .load(delta_table_path) \
-            .createOrReplaceGlobalTempView(temporary_view_name)
+            .createOrReplaceTempView(temporary_view_name)
+
+def extractDateHourFromDataFrame(df: DataFrame, dateColName: str) -> DataFrame:
+    df = df.withColumn("timestamp", to_timestamp(from_unixtime(df[dateColName]))) \
+            .withColumn("full_date", date_format("timestamp", "yyyy-MM-dd HH:mm:ss")) \
+                .withColumn("date", to_date("full_date")) \
+                    .withColumn("hour", hour("full_date")) \
+                        .withColumn("month", month("full_date")) \
+                            .drop(dateColName) \
+                                .drop("timestamp") \
+                                    .drop("full_date")
+            
+    return df
+
 
 # COMMAND ----------
 
-# DBTITLE 1,Cells [5-8]: Bronze Tables Processing
+# MAGIC %md
+# MAGIC <h1> Bronze Data ETL Pipeline <h1>
+
+# COMMAND ----------
+
+# DBTITLE 1,ETL for Historical Weather and Bike Trip Data
+from pyspark.sql.functions import to_timestamp, to_date, from_unixtime, date_format, hour, month
+
 # ETL for Historical Weather Data
 weather_df = readDataFrameFromSource(NYC_WEATHER_FILE_PATH, "csv")
-weather_df.printSchema()
-
-weather_delta_table_name = 'nyc_historical_weather_data'
-writeDataFrameToDeltaTable(weather_df, weather_delta_table_name)
 
 # COMMAND ----------
+
+# Transform the dt field so as to have independent date and hour columns. We plan to partition the delta table by month to have a manageable directory size.
+weather_df = extractDateHourFromDataFrame(weather_df, "dt")
+display(weather_df)
+
+# Write to a delta table partitioned by the month and z-ordered by date and hour
+weather_delta_table_name = 'nyc_historical_weather_data'
+writeDataFrameToDeltaTableOptimized(weather_df, weather_delta_table_name, "month", "date, hour")
+
+# COMMAND ----------
+
+import pyspark.sql.functions as F
 
 # ETL for Historical Bike Trip Data
 bike_df = readDataFrameFromSource(BIKE_TRIP_DATA_PATH, "csv")
-bike_df.printSchema()
+historic_bike_trips_for_starting_station_df = bike_df.filter(F.col('start_station_name')== GROUP_STATION_ASSIGNMENT)
+historic_bike_trips_for_ending_station_df = bike_df.filter(F.col('end_station_name')== GROUP_STATION_ASSIGNMENT)
 
-bike_delta_table_name = 'nyc_historical_bike_trip_data'
-writeDataFrameToDeltaTable(bike_df, bike_delta_table_name)
+# COMMAND ----------
+
+# Transform the started_at for starting_df. This will ensure we have independent date and hour columns to z-order. We plan to partition the delta table by month to have a manageable directory size.
+historic_bike_trips_for_starting_station_df = extractDateHourFromDataFrame(historic_bike_trips_for_starting_station_df, "started_at")
+display(historic_bike_trips_for_starting_station_df)
+
+nyc_historical_starting_bike_delta_table_name = 'nyc_historical_starting_bike_trip_data'
+writeDataFrameToDeltaTableOptimized(historic_bike_trips_for_starting_station_df, nyc_historical_starting_bike_delta_table_name, "month", "date, hour")
+
+# Transform the ended_at field ending_df. This will ensure we have independent date and hour columns to z-order. We plan to partition the delta table by month to have a manageable directory size.
+historic_bike_trips_for_ending_station_df = extractDateHourFromDataFrame(historic_bike_trips_for_ending_station_df, "ended_at")
+display(historic_bike_trips_for_ending_station_df)
+
+nyc_historical_ending_bike_delta_table_name = 'nyc_historical_ending_bike_trip_data'
+writeDataFrameToDeltaTableOptimized(historic_bike_trips_for_ending_station_df, nyc_historical_ending_bike_delta_table_name, "month", "date, hour")
 
 # COMMAND ----------
 
 # DBTITLE 1,ETL for Live Bronze Tables updated every 30 mins
 # Load the Delta table into a DataFrame
-bronze_station_info_df = readDeltaTable(BRONZE_STATION_INFO_PATH) 
-bronze_station_info_df.printSchema()
-
-bronze_station_status_df = readDeltaTable(BRONZE_STATION_STATUS_PATH)
-bronze_station_status_df.printSchema()
-
-bronze_nyc_weather_df = readDeltaTable(BRONZE_NYC_WEATHER_PATH)
-bronze_nyc_weather_df.printSchema()
+bronze_station_info_df = readDeltaTable(BRONZE_STATION_INFO_PATH, True)
+bronze_station_status_df = readDeltaTable(BRONZE_STATION_STATUS_PATH, True)
+bronze_nyc_weather_df = readDeltaTable(BRONZE_NYC_WEATHER_PATH, True)
 
 # COMMAND ----------
 
 # MAGIC %sql
 # MAGIC show tables from g02_db
-
-# COMMAND ----------
-
-# DBTITLE 1,Remaining Cells : Gold Tables Processing
-# # Filter data using SQL query
-# filtered_df_g02 = spark.sql("""
-#   SELECT * 
-#   FROM historic_bike_trip_data_view 
-#   WHERE start_station_name = 'West St & Chambers St'
-# """)
-
-# # Display filtered data
-# display(filtered_df_g02)  
-
-# # Display count of dataframe
-# filtered_df_g02.count()
-
-# COMMAND ----------
-
-# # Write the dataframe to bronze delta table
-# delta_table_name = 'historic_bike_trip_g02'
-# filtered_df_g02.write.format("delta").mode("append").option("path", GROUP_DATA_PATH + delta_table_name).saveAsTable(delta_table_name)
 
 # COMMAND ----------
 
