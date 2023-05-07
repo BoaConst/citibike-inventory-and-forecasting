@@ -8,14 +8,10 @@ pip install folium
 # COMMAND ----------
 
 # DBTITLE 0,YOUR APPLICATIONS CODE HERE...
-start_date = str(dbutils.widgets.get('01.start_date'))
-end_date = str(dbutils.widgets.get('02.end_date'))
 hours_to_forecast = int(dbutils.widgets.get('03.hours_to_forecast'))
-promote_model = bool(True if str(dbutils.widgets.get('04.promote_model')).lower() == 'yes' else False)
 
-print(start_date,end_date,hours_to_forecast, promote_model)
+print(hours_to_forecast)
 
-print("YOUR CODE HERE...")
 
 # COMMAND ----------
 
@@ -30,6 +26,7 @@ print("The current timestamp is:",currentdate)
 
 # COMMAND ----------
 
+# DBTITLE 1,Production and Staging model Details
 client = MlflowClient()
 
 production_model = client.get_latest_versions(GROUP_MODEL_NAME, stages=['Production'])
@@ -46,6 +43,7 @@ print(staging_model)
 
 # COMMAND ----------
 
+# DBTITLE 1,Show the station on map
 import folium
 
 print("Assigned Station: ", GROUP_STATION_ASSIGNMENT)
@@ -67,10 +65,10 @@ from pyspark.sql.functions import current_timestamp
 currentdate = pd.Timestamp.now(tz='US/Eastern').round(freq = 'H')
 fmt = '%Y-%m-%d %H:%M:%S'
 currentdate = currentdate.strftime(fmt) 
-print("The current timestamp is:",currentdate)
 
 # COMMAND ----------
 
+# DBTITLE 1,Read-in the weather data for showing the current weather
 weather = spark.read.format("delta").load(GROUP_DATA_PATH + "Bronze_live_nyc_weather_data")
 display(weather)
 
@@ -83,6 +81,7 @@ display(weather_current)
 
 # COMMAND ----------
 
+# DBTITLE 1,Number of Docks at our station
 print(GROUP_STATION_ASSIGNMENT)
 info_df = spark.read.format("delta").load(BRONZE_STATION_INFO_PATH)
 import pyspark.sql.functions as F
@@ -92,8 +91,7 @@ print("Total Number of docks at this station : "+str(G_02_station_capacity))
 
 # COMMAND ----------
 
-display(dbutils.fs.ls(GROUP_DATA_PATH)
-)
+display(dbutils.fs.ls(GROUP_DATA_PATH))
 
 # COMMAND ----------
 
@@ -104,8 +102,9 @@ display(Hist_live_df)
 
 # COMMAND ----------
 
+# DBTITLE 1,Predicting for last 10 days in Live data and forecasting for 4 hours in future
 # Parameter for Prediction and Forcasting in Production
-Hours_To_Forecast = 4
+Hours_To_Forecast = hours_to_forecast
 Days_To_Predict = 10
 
 # Get max data from the Hist and live data
@@ -127,6 +126,7 @@ predict_data_pd = predict_data_pd.dropna()
 
 # COMMAND ----------
 
+# DBTITLE 1,Plot the forecasted values in production
 from mlflow.tracking.client import MlflowClient
 import plotly.express as px
 import pandas as pd
@@ -219,6 +219,7 @@ results_forecast = spark.createDataFrame(results_forecast)
 
 # COMMAND ----------
 
+# DBTITLE 1,Write the inferences to Gold Table
 results = spark.createDataFrame(results)
 MODEL_INFERENCING_INFO = GROUP_DATA_PATH + "Gold_Inferencing_tables"
 
