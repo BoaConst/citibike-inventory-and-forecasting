@@ -4,12 +4,11 @@
 # COMMAND ----------
 
 # DBTITLE 1,Parsing the parameters provided by the main notebook
-start_date = str(dbutils.widgets.get('01.start_date'))
-end_date = str(dbutils.widgets.get('02.end_date'))
-hours_to_forecast = int(dbutils.widgets.get('03.hours_to_forecast'))
-promote_model = bool(True if str(dbutils.widgets.get('04.promote_model')).lower() == 'yes' else False)
+# Using the widget to filter the historic data tables
+# start_date = str(dbutils.widgets.get('01.start_date'))
+# end_date = str(dbutils.widgets.get('02.end_date'))
 
-print(start_date,end_date,hours_to_forecast, promote_model)
+# print(start_date,end_date)
 
 # COMMAND ----------
 
@@ -244,12 +243,18 @@ historic_bike_trips_for_ending_station_df = bike_df.filter(F.col('end_station_na
 historic_bike_trips_for_starting_station_df = extractDateHourFromDataFrame(historic_bike_trips_for_starting_station_df, "started_at", False)
 display(historic_bike_trips_for_starting_station_df)
 
+# Filter for the date range in Widget
+# historic_bike_trips_for_starting_station_df= historic_bike_trips_for_starting_station_df.filter(F.col('date') >= start_date & F.col('date') <= end_date)
+
 nyc_historical_starting_bike_delta_table_name = 'Silver_nyc_historical_G02_starting_bike_trip_data'
 writeDataFrameToDeltaTableOptimized(historic_bike_trips_for_starting_station_df, nyc_historical_starting_bike_delta_table_name, "month", "date, hour")
 
 # Transform the ended_at field ending_df. This will ensure we have independent date and hour columns to z-order. We plan to partition the delta table by month to have a manageable directory size.
 historic_bike_trips_for_ending_station_df = extractDateHourFromDataFrame(historic_bike_trips_for_ending_station_df, "ended_at", False)
 display(historic_bike_trips_for_ending_station_df)
+
+# Filter for the date range in Widget
+# historic_bike_trips_for_ending_station_df= historic_bike_trips_for_ending_station_df.filter(F.col('date') >= start_date & F.col('date') <= end_date)
 
 nyc_historical_ending_bike_delta_table_name = 'Silver_nyc_historical_G02_ending_bike_trip_data'
 writeDataFrameToDeltaTableOptimized(historic_bike_trips_for_ending_station_df, nyc_historical_ending_bike_delta_table_name, "month", "date, hour")
@@ -347,6 +352,7 @@ display(grouped_weather_df.orderBy("date","hour"))
 from pyspark.sql.functions import col
 
 # Joining with grouped weather data for final dataframe for modelling
+#grouped_weather_df = grouped_weather_df.filter(F.col('date') >= start_date & F.col('date') <= end_date)
 Data_modelling_df = grouped_weather_df.join(Data_modelling_df, ["date", "hour"], "left_outer")
 display(Data_modelling_df.orderBy("date","hour"))
 Data_modelling_df.printSchema()
@@ -428,6 +434,18 @@ print("Bronze Station Status delta files read-in was successful! "
 
 print("Bronze NYC Weather delta files read-in was successful! "
         f"There are a total of {(bronze_nyc_weather_df.count())} lines ")
+
+# COMMAND ----------
+
+# Write raw data files to Bronze Tables
+station_info_delta_table_name = 'Bronze_station_info_data'
+writeDataFrameToDeltaTable(bronze_station_info_df, station_info_delta_table_name)
+
+station_status_delta_table_name = 'Bronze_station_status_data'
+writeDataFrameToDeltaTable(bronze_station_status_df, station_status_delta_table_name)
+
+nyc_weather_delta_table_name = 'Bronze_live_nyc_weather_data'
+writeDataFrameToDeltaTable(bronze_nyc_weather_df, nyc_weather_delta_table_name)
 
 # COMMAND ----------
 
