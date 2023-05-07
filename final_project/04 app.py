@@ -7,6 +7,22 @@ pip install folium
 
 # COMMAND ----------
 
+import mlflow
+import json
+import pandas as pd
+import numpy as np
+from prophet import Prophet, serialize
+from prophet.diagnostics import cross_validation, performance_metrics
+from mlflow.tracking.client import MlflowClient
+import seaborn as sns
+import matplotlib.pyplot as plt
+sns.set(color_codes=True)
+import itertools
+from pyspark.sql.functions import max, date_sub,to_timestamp,date_format
+from pyspark.sql.functions import col
+
+# COMMAND ----------
+
 # DBTITLE 0,YOUR APPLICATIONS CODE HERE...
 hours_to_forecast = int(dbutils.widgets.get('03.hours_to_forecast'))
 
@@ -223,7 +239,7 @@ results_forecast = spark.createDataFrame(results_forecast)
 results = spark.createDataFrame(results)
 MODEL_INFERENCING_INFO = GROUP_DATA_PATH + "Gold_Inferencing_tables"
 
-results = spark.createDataFrame(results)
+#results = spark.createDataFrame(results)
 results.write.format("delta").option("path", MODEL_INFERENCING_INFO).mode("overwrite").save()
 
 # COMMAND ----------

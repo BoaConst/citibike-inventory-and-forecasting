@@ -5,10 +5,10 @@
 
 # DBTITLE 1,Parsing the parameters provided by the main notebook
 # Using the widget to filter the historic data tables
-# start_date = str(dbutils.widgets.get('01.start_date'))
-# end_date = str(dbutils.widgets.get('02.end_date'))
+start_date = str(dbutils.widgets.get('01.start_date'))
+end_date = str(dbutils.widgets.get('02.end_date'))
 
-# print(start_date,end_date)
+print(start_date,end_date)
 
 # COMMAND ----------
 
@@ -181,7 +181,59 @@ def extractDateHourFromDataFrame1(df: DataFrame, dateColName: str) -> DataFrame:
 
 # DBTITLE 1,Bronze Tables for Historical Weather and Bike Trip Data
 # Read Historical Weather Data
+
+from pyspark.sql.types import StructType, StructField, StringType
+# Define the schema for the data
+weather_schema=StructType([
+    StructField("dt", StringType(), True),
+    StructField("temp", StringType(), True),
+    StructField("feels_like", StringType(), True),
+    StructField("pressure", StringType(), True),
+    StructField("humidity", StringType(), True),
+    StructField("dew_point", StringType(), True),
+    StructField("uvi", StringType(), True),
+    StructField("clouds", StringType(), True),
+    StructField("visibility", StringType(), True),
+    StructField("wind_speed", StringType(), True),
+    StructField("wind_deg", StringType(), True),
+    StructField("pop", StringType(), True),
+    StructField("snow_1h", StringType(), True),
+    StructField("id", StringType(), True),
+    StructField("main", StringType(), True),
+    StructField("description", StringType(), True),
+    StructField("icon", StringType(), True),
+    StructField("loc", StringType(), True),
+    StructField("lat", StringType(), True),
+    StructField("lon", StringType(), True),
+    StructField("timezone", StringType(), True),
+    StructField("timezone_offset", StringType(), True),
+    StructField("rain_1h", StringType(), True),
+])
+
+weather_delta_table_name = 'Bronze_nyc_historical_weather_data'
+table_path = GROUP_DATA_PATH + weather_delta_table_name
+
+query = (
+    spark
+    .readStream
+    .format("csv")
+    .schema(weather_schema)  # specify the schema for the data
+    .option("header", "true")  # specify if the file has a header row
+    .load(NYC_WEATHER_FILE_PATH)
+    .writeStream
+    .format("delta")
+    .option("path", table_path)
+    .option("checkpointLocation", table_path + "/checkpoint")
+    .option("mode", "append")
+    .trigger(availableNow=True)
+    .start()
+)
+
+# Wait for the stream to finish
+query.awaitTermination()
+
 weather_df = readDataFrameFromSource(NYC_WEATHER_FILE_PATH, "csv")
+
 
 # COMMAND ----------
 
@@ -191,13 +243,47 @@ print("Historic Weather data files read-in was successful! "
 
 # COMMAND ----------
 
-# Write raw historic weather data to Bronze table
-weather_delta_table_name = 'Bronze_nyc_historical_weather_data'
-writeDataFrameToDeltaTable(weather_df, weather_delta_table_name) 
-
-# COMMAND ----------
-
 # Read Historical Bike Trip Data
+
+# Define the schema for the data
+bike_schema = StructType([
+    StructField("ride_id", StringType(), True),
+    StructField("rideable_type", StringType(), True),
+    StructField("started_at", StringType(), True),
+    StructField("ended_at", StringType(), True),
+    StructField("start_station_name", StringType(), True),
+    StructField("start_station_id", StringType(), True),
+    StructField("end_station_name", StringType(), True),
+    StructField("end_station_id", StringType(), True),
+    StructField("start_lat", StringType(), True),
+    StructField("start_lng", StringType(), True),
+    StructField("end_lat", StringType(), True),
+    StructField("end_lng", StringType(), True),
+    StructField("member_casual", StringType(), True)
+])
+
+bike_delta_table_name = 'Bronze_nyc_historical_bike_trip_data'
+table_path = GROUP_DATA_PATH + bike_delta_table_name
+
+query = (
+    spark
+    .readStream
+    .format("csv")
+    .schema(bike_schema)  # specify the schema for the data
+    .option("header", "true")  # specify if the file has a header row
+    .load(BIKE_TRIP_DATA_PATH)
+    .writeStream
+    .format("delta")
+    .option("path", table_path)
+    .option("checkpointLocation", table_path + "/checkpoint")
+    .option("mode", "append")
+    .trigger(availableNow=True)
+    .start()
+)
+
+# Wait for the stream to finish
+query.awaitTermination()
+
 bike_df = readDataFrameFromSource(BIKE_TRIP_DATA_PATH, "csv")
 
 # COMMAND ----------
@@ -205,12 +291,6 @@ bike_df = readDataFrameFromSource(BIKE_TRIP_DATA_PATH, "csv")
 # Print the total number of row in the raw data file
 print("Historic Bike Trip data files read-in was successful! "
         f"There are a total of {(bike_df.count())} lines ")
-
-# COMMAND ----------
-
-# Write raw bike trips data to Bronze table
-nyc_historical_bike_delta_table_name = 'Bronze_nyc_historical_bike_trip_data'
-writeDataFrameToDeltaTable(bike_df, nyc_historical_bike_delta_table_name) 
 
 # COMMAND ----------
 
