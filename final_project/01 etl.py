@@ -406,6 +406,11 @@ writeDataFrameToDeltaTable(Data_modelling_df, data_for_modelling_table_name)
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC <h1> Gold Data ETL Pipeline <h1>
+
+# COMMAND ----------
+
 # DBTITLE 1,Bronze Tables for Live Delta Tables updated every 30 mins
 # Load the Delta table into a DataFrame
 bronze_station_info_df = readDeltaTable(BRONZE_STATION_INFO_PATH, False)
@@ -423,11 +428,6 @@ print("Bronze Station Status delta files read-in was successful! "
 
 print("Bronze NYC Weather delta files read-in was successful! "
         f"There are a total of {(bronze_nyc_weather_df.count())} lines ")
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC <h1> Gold Data ETL Pipeline <h1>
 
 # COMMAND ----------
 
@@ -453,6 +453,11 @@ bronze_station_status_df = bronze_station_status_df.dropDuplicates(['date', 'hou
 bronze_station_status_df = bronze_station_status_df.withColumn("net_change", lead(col("num_bikes_available")).over(Window.orderBy("date")) - col("num_bikes_available"))
 bronze_station_status_df = bronze_station_status_df.fillna(0, subset=["net_change"])
 
+display(bronze_station_status_df)
+# Write the refined dataframe to a gold table
+silver_station_status_delta_table_name = 'Silver_G02_station_status_data'
+writeDataFrameToDeltaTableOptimized(bronze_station_status_df, silver_station_status_delta_table_name, "month", "date, hour")
+
 bronze_station_status_df = bronze_station_status_df.select("date", "hour", "net_change")
 
 columns_to_drop = ["dt", "weather"]
@@ -461,8 +466,7 @@ columns_to_drop = ["dt", "weather"]
 bronze_nyc_weather_df = bronze_nyc_weather_df \
                             .drop(*columns_to_drop) \
                                 .withColumnRenamed("rain.1h", "rain_1h") \
-                                    .dropDuplicates(["date", "hour"]) \
-                                        .orderBy("date", "hour")
+                                    
 
 # COMMAND ----------
 
@@ -484,7 +488,7 @@ grouped_bronze_nyc_weather_df = grouped_bronze_nyc_weather_df.withColumn("day_of
 from pyspark.sql.functions import concat, lit, to_timestamp,col,lpad
 
 # Joining with grouped weather data for final dataframe for modelling
-Data_modelling_live_df = grouped_bronze_nyc_weather_df.join(bronze_station_status_df, ["date", "hour"], "left_outer")
+Data_modelling_live_df = bronze_station_status_df.join(grouped_bronze_nyc_weather_df, ["date", "hour"], "left_outer")
 
 # Making the hour column consistent length
 Data_modelling_live_df = Data_modelling_live_df.withColumn(
